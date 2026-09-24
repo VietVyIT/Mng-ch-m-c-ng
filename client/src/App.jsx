@@ -33,7 +33,7 @@ const adminNavItems = [
   { label: 'Hồ sơ', icon: UserRound },
 ];
 const userNavItems = [
-  { label: 'Trang chủ / Chấm công', icon: CalendarCheck },
+  { label: 'Chấm công', icon: CalendarCheck },
   { label: 'Lịch sử cá nhân', icon: FileClock },
   { label: 'Hồ sơ', icon: UserRound },
 ];
@@ -67,7 +67,7 @@ async function compressWebcamFrame(video) {
 
 function App() {
   const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('attendance_user') || 'null'));
-  const [page, setPage] = useState(() => user?.role === 'USER' ? 'Trang chủ / Chấm công' : 'Dashboard');
+  const [page, setPage] = useState(() => user?.role === 'USER' ? 'Chấm công' : 'Dashboard');
   const [showLogin, setShowLogin] = useState(!user);
   const [showForgot, setShowForgot] = useState(false);
 
@@ -85,7 +85,7 @@ function App() {
         onLogin={(loggedInUser) => {
           setUser(loggedInUser);
           setShowLogin(false);
-          setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : 'Trang chủ / Chấm công');
+          setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : 'Chấm công');
         }}
         onForgot={() => setShowForgot(true)}
       />
@@ -152,6 +152,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
   const [mobileMenu, setMobileMenu] = useState(false);
   const navItems = user.role === 'USER' ? userNavItems : adminNavItems;
   function scrollToTop() {
+    setMobileMenu(false);
     const mainContainer = document.querySelector('.dashboard-main');
     if (mainContainer) {
       mainContainer.scrollTo({ top: 0, behavior: 'smooth' });
@@ -160,6 +161,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
   }
   return (
     <div className="dashboard-app">
+      {mobileMenu && <button className="sidebar-backdrop" aria-label="Đóng menu" onClick={() => setMobileMenu(false)} />}
       <aside className={mobileMenu ? 'sidebar sidebar-open' : 'sidebar'}>
         <div className="sidebar-brand" role="button" tabIndex="0" aria-label="Cuộn lên đầu trang" onClick={scrollToTop} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') scrollToTop(); }}><span className="brand-square">A</span><div><strong>ATTENDLY</strong><small>Attendance system</small></div><button className="close-menu" onClick={(event) => { event.stopPropagation(); setMobileMenu(false); }}><X size={18} /></button></div>
         <span className="sidebar-caption">WORKSPACE</span>
@@ -210,6 +212,7 @@ function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const notificationRef = useRef(null);
   async function loadNotifications() {
     const token = localStorage.getItem('attendance_token');
     const response = await fetch(`${apiUrl}/notifications`, { headers: { Authorization: `Bearer ${token}` } });
@@ -221,7 +224,14 @@ function NotificationCenter() {
   useEffect(() => {
     loadNotifications().catch(() => {});
     const timer = window.setInterval(() => loadNotifications().catch(() => {}), 30000);
-    return () => window.clearInterval(timer);
+    function closeOnOutside(event) {
+      if (!notificationRef.current?.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', closeOnOutside);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('mousedown', closeOnOutside);
+    };
   }, []);
   async function markRead(id) {
     const token = localStorage.getItem('attendance_token');
@@ -235,7 +245,7 @@ function NotificationCenter() {
     setNotifications((items) => items.map((item) => ({ ...item, is_read: 1 })));
     setUnreadCount(0);
   }
-  return <div className="notification-center"><button className="notification-trigger" aria-label="Thông báo" onClick={() => setOpen((value) => !value)}><Bell size={19} />{unreadCount > 0 && <span className="notification-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}</button>{open && <div className="notification-popover"><div className="notification-heading"><strong>Thông báo</strong><button onClick={markAllRead}><CheckCheck size={14} /> Đánh dấu tất cả đã đọc</button></div><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.is_read ? 'read' : 'unread'}`} onClick={() => !item.is_read && markRead(item.id)}><span className={`notification-type ${item.type.toLowerCase()}`}>●</span><span><strong>{item.title}</strong><small>{item.message}</small><em>{formatNotificationTime(item.created_at)}</em></span></button>) : <div className="notification-empty">Chưa có thông báo.</div>}</div></div>}</div>;
+  return <div className="notification-center" ref={notificationRef}><button className="notification-trigger" aria-label="Thông báo" onClick={() => setOpen((value) => !value)}><Bell size={19} />{unreadCount > 0 && <span className="notification-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}</button>{open && <><button className="notification-backdrop" aria-label="Đóng thông báo" onClick={() => setOpen(false)} /><div className="notification-popover"><div className="notification-heading"><strong>Thông báo</strong><button onClick={markAllRead}><CheckCheck size={14} /> Đánh dấu tất cả đã đọc</button></div><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.is_read ? 'read' : 'unread'}`} onClick={() => !item.is_read && markRead(item.id)}><span className={`notification-type ${item.type.toLowerCase()}`}>●</span><span><strong>{item.title}</strong><small>{item.message}</small><em>{formatNotificationTime(item.created_at)}</em></span></button>) : <div className="notification-empty">Chưa có thông báo.</div>}</div></div></>}</div>;
 }
 
 function formatNotificationTime(value) {
