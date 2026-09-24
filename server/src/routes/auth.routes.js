@@ -10,7 +10,7 @@ const router = Router();
 router.post('/login', async (request, response, next) => {
   try {
     const { username, password } = request.body;
-    if (!username || !password) {
+    if (typeof username !== 'string' || typeof password !== 'string' || !username.trim() || !password) {
       return response.status(400).json({
         success: false,
         message: 'Vui lòng nhập tên đăng nhập và mật khẩu.',
@@ -19,7 +19,7 @@ router.post('/login', async (request, response, next) => {
     }
 
     const [rows] = await pool.execute(
-      'SELECT id, full_name, username, password_hash, role, face_registered, must_change_password, phone, address, hometown_province_code, hometown_province_name FROM users WHERE username = ? LIMIT 1',
+      'SELECT id, full_name, username, password_hash, role, face_registered, must_change_password, phone, address, hometown_province_code, hometown_province_name FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
       [username.trim()],
     );
     const user = rows[0];

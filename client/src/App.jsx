@@ -85,7 +85,7 @@ function App() {
         onLogin={(loggedInUser) => {
           setUser(loggedInUser);
           setShowLogin(false);
-          setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : 'Chấm công');
+          setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : loggedInUser.mustChangePassword ? 'Hồ sơ' : 'Chấm công');
         }}
         onForgot={() => setShowForgot(true)}
       />
@@ -268,10 +268,65 @@ function PageContent({ page, user, onUserUpdated }) {
     if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
     return <UserPortal user={user} />;
   }
+  if (page === 'Chấm công') return <AdminAttendanceWorkArea user={user} />;
   if (page === 'Lịch sử') return <AttendanceHistory user={user} />;
   if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
   if (page !== 'Dashboard') return <section className="placeholder-page"><div className="placeholder-icon"><FileClock size={28} /></div><span className="section-label">AUTHORIZED AREA</span><h2>{page}</h2><p>Chức năng này đã được bảo vệ bằng JWT và vai trò <strong>{user.role}</strong>. Nội dung nghiệp vụ sẽ được triển khai ở phase tiếp theo.</p></section>;
   return <AdminDashboard user={user} />;
+}
+
+function AdminAttendanceWorkArea({ user }) {
+  const [shiftData, setShiftData] = useState(null);
+  const [today, setToday] = useState(null);
+  const [faceModal, setFaceModal] = useState(false);
+  const [checkedIn, setCheckedIn] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadAttendance() {
+    const token = localStorage.getItem('attendance_token');
+    const headers = { Authorization: `Bearer ${token}` };
+    const [shiftResponse, todayResponse, historyResponse] = await Promise.all([
+      fetch(`${apiUrl}/attendance/shifts/today`, { headers }),
+      fetch(`${apiUrl}/attendance/today`, { headers }),
+      fetch(`${apiUrl}/attendance/my`, { headers }),
+    ]);
+    const [shiftBody, todayBody, historyBody] = await Promise.all([shiftResponse.json(), todayResponse.json(), historyResponse.json()]);
+    if (!shiftResponse.ok || !todayResponse.ok || !historyResponse.ok) throw new Error('Không thể tải dữ liệu chấm công.');
+    const current = todayBody.data || null;
+    const historyToday = (historyBody.data || []).find((record) => new Date(record.attendance_date).toDateString() === new Date().toDateString());
+    setShiftData(shiftBody.data || null);
+    setToday({ ...historyToday, ...current });
+    setCheckedIn(Boolean(current?.check_in && !current?.check_out));
+  }
+
+  useEffect(() => {
+    loadAttendance().catch((requestError) => setError(requestError.message));
+  }, []);
+
+  async function handleFaceSuccess(embedding, imageData) {
+    const token = localStorage.getItem('attendance_token');
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
+    if (!checkedIn && !user.faceRegistered) {
+      const registerResponse = await fetch(`${apiUrl}/face/register`, { method: 'POST', headers, body: JSON.stringify({ embedding }) });
+      const registerBody = await registerResponse.json();
+      if (!registerResponse.ok || !registerBody.success) throw new Error(registerBody.message || 'Không thể đăng ký khuôn mặt.');
+      user.faceRegistered = true;
+      localStorage.setItem('attendance_user', JSON.stringify({ ...user, faceRegistered: true }));
+    }
+    const endpoint = checkedIn ? 'check-out' : 'check-in';
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData }) });
+    const body = await response.json();
+    if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
+    await loadAttendance();
+    setFaceModal(false);
+  }
+
+  const formatDate = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
+  const currentShiftCode = shiftData?.current?.code;
+  const completed = Boolean(today?.check_in && today?.check_out);
+  const statusLabel = completed ? 'Đã duyệt' : today?.status === 'PENDING' ? 'Chờ Admin duyệt' : today?.check_in ? 'Đã check-in' : 'Chưa chấm';
+
+  return <section className="attendance-work-area"><div className="attendance-work-heading"><div><span className="section-label">ATTENDANCE WORK AREA</span><h2>Chấm công hàng ngày</h2><p>{formatDate}</p></div><span className="live-dot">LIVE</span></div>{error && <div className="form-error">{error}</div>}<div className="attendance-work-grid"><div className="content-panel shift-status-card"><div className="panel-heading"><div><h3>Ca làm việc & trạng thái</h3><p>Ca tối chỉ hiển thị khi Admin bật.</p></div></div><div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === currentShiftCode ? 'active' : ''}`}><div><strong>{shift.name}</strong><small>{shift.start.slice(0, 5)} — {shift.end.slice(0, 5)}</small></div>{shift.code === currentShiftCode && <span>ĐANG DIỄN RA</span>}</div>)}</div><div className="attendance-status-card"><div><span>Trạng thái</span><strong>{statusLabel}</strong></div><div className="attendance-time-row"><div><small>Check-in</small><strong>{today?.check_in ? new Date(today.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '--:--'}</strong></div><div><small>Check-out</small><strong>{today?.check_out ? new Date(today.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '--:--'}</strong></div></div><div className="attendance-photo-hints"><span>{today?.check_in_photo_available ? 'Ảnh check-in đã lưu' : 'Chưa có ảnh check-in'}</span><span>{today?.check_out_photo_available ? 'Ảnh check-out đã lưu' : 'Chưa có ảnh check-out'}</span></div></div></div><div className="content-panel face-action-card"><div className="panel-heading"><div><h3>Face ID Action</h3><p>Chụp ảnh nén để xác thực chấm công.</p></div><Camera size={20} /></div><div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>{completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : <button className="checkout-button face-action" disabled={!shiftData?.current} onClick={() => setFaceModal(true)}><Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} /></button>}<small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small></div></div>{faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}</section>;
 }
 
 function UserProfile({ user, onUserUpdated }) {

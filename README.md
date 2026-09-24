@@ -77,5 +77,17 @@ Sau khi cập nhật cấu trúc database, chạy migration:
 
 > Tài khoản và dữ liệu mẫu chỉ dành cho môi trường phát triển local, không dùng trong production.
 
+### Nạp danh sách thành viên an toàn
+
+Danh sách thành viên thực tế nằm trong `server/seed/members.json` ở máy local và đã được thêm vào `.gitignore`, không được commit lên GitHub. Chạy lệnh sau để tạo/cập nhật tài khoản:
+
+```powershell
+npm run seed:members --workspace server
+```
+
+Script chỉ lưu mật khẩu dưới dạng bcrypt hash (`cost 12`), đặt `must_change_password = TRUE`, và không lưu mã CCCD dạng plaintext trong database. Sau lần đăng nhập đầu tiên, thành viên được đưa tới trang Hồ sơ để đổi mật khẩu.
+
+Backend đã bật Helmet, tắt `x-powered-by`, giới hạn body JSON, giới hạn đăng nhập theo IP, truy vấn SQL có parameter binding, xác thực JWT và kiểm tra dữ liệu đầu vào cơ bản. Không đưa `server/.env` hoặc `server/seed/members.json` lên repository.
+
 Các mục Chấm công, Lịch sử và Hồ sơ yêu cầu đăng nhập. JWT được gửi qua header
 `Authorization: Bearer <token>` và backend kiểm tra role trước khi cho phép truy cập.
