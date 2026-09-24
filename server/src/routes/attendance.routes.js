@@ -93,6 +93,7 @@ router.get('/my', authenticate, async (request, response, next) => {
     const [rows] = await pool.execute(
       `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
               check_in, check_out, total_hours, status, punctuality_status, face_verified, photo_expired,
+              (SELECT total_work_days FROM users WHERE id = attendance.user_id) AS total_work_days,
               (SELECT captured_at FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_IN' ORDER BY e.captured_at DESC LIMIT 1) AS check_in_captured_at,
               (SELECT captured_at FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_OUT' ORDER BY e.captured_at DESC LIMIT 1) AS check_out_captured_at,
               (SELECT status FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_IN' ORDER BY e.captured_at DESC LIMIT 1) AS check_in_event_status,
@@ -102,7 +103,20 @@ router.get('/my', authenticate, async (request, response, next) => {
        FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC, check_in DESC LIMIT 100`,
       [request.user.userId],
     );
-    return response.json({ success: true, data: rows });
+    const [importedRows] = await pool.execute(
+      `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
+              check_in, check_out, total_hours, status, NULL AS punctuality_status,
+              FALSE AS face_verified, TRUE AS imported_from_excel,
+              (SELECT total_work_days FROM users WHERE id = imported_attendance_records.user_id) AS total_work_days,
+              check_in AS check_in_captured_at, check_out AS check_out_captured_at,
+              NULL AS check_in_event_status, NULL AS check_out_event_status,
+              0 AS check_in_photo_available, 0 AS check_out_photo_available
+       FROM imported_attendance_records
+       WHERE user_id = ?
+       ORDER BY attendance_date DESC, check_in DESC LIMIT 500`,
+      [request.user.userId],
+    );
+    return response.json({ success: true, data: [...rows, ...importedRows].sort((a, b) => new Date(b.attendance_date) - new Date(a.attendance_date)) });
   } catch (error) {
     return next(error);
   }

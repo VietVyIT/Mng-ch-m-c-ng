@@ -87,7 +87,20 @@ npm run seed:members --workspace server
 
 Script chỉ lưu mật khẩu dưới dạng bcrypt hash (`cost 12`), đặt `must_change_password = TRUE`, và không lưu mã CCCD dạng plaintext trong database. Sau lần đăng nhập đầu tiên, thành viên được đưa tới trang Hồ sơ để đổi mật khẩu.
 
-Backend đã bật Helmet, tắt `x-powered-by`, giới hạn body JSON, giới hạn đăng nhập theo IP, truy vấn SQL có parameter binding, xác thực JWT và kiểm tra dữ liệu đầu vào cơ bản. Không đưa `server/.env` hoặc `server/seed/members.json` lên repository.
+Backend đã bật Helmet, tắt `x-powered-by`, giới hạn body JSON, giới hạn đăng nhập sai tối đa 10 lần trong 5 phút theo IP, truy vấn SQL có parameter binding, xác thực JWT và kiểm tra dữ liệu đầu vào cơ bản. Không đưa `server/.env` hoặc `server/seed/members.json` lên repository.
+
+### Import bảng chấm công Excel
+
+Admin mở Dashboard, chọn **Nhập dữ liệu Excel**, rồi tải file `.xlsx` hoặc `.xls`. File cần có:
+
+- Một dòng ngày tháng dạng `D/M` hoặc `D/M/YYYY`.
+- Dòng ngay bên dưới ghi ca `Sáng`, `Chiều`, `Tối`.
+- Các cột `Họ & Tên`, `MSSV` và `Total` ở bên trái/bên phải bảng.
+- Ô có `x` hoặc `X` được tính là đã đi làm.
+
+Hệ thống hiển thị bản xem trước trước khi lưu. Thành viên được ghép theo MSSV trước, sau đó theo họ tên không phân biệt hoa thường. Các ca Excel được lưu ở bảng `imported_attendance_records` để không làm mất trường hợp một người có nhiều ca trong cùng ngày. Chạy migration [database/migrations/008_imported_attendance.sql](database/migrations/008_imported_attendance.sql) trước khi sử dụng.
+
+Nếu thành viên chưa tồn tại, hệ thống sẽ tự tạo tài khoản USER với username là họ tên trong Excel và mật khẩu tạm thời `user123@`; tài khoản được đánh dấu đổi mật khẩu ở lần đăng nhập đầu tiên. Cột `Total` luôn được lưu nguyên giá trị làm tổng ngày công, không thay thế bằng số lượng dấu `x`.
 
 Các mục Chấm công, Lịch sử và Hồ sơ yêu cầu đăng nhập. JWT được gửi qua header
 `Authorization: Bearer <token>` và backend kiểm tra role trước khi cho phép truy cập.

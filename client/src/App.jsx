@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Chart from 'chart.js/auto';
 import * as faceapi from '@vladmandic/face-api';
+import * as XLSX from 'xlsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   ArrowRight,
@@ -19,6 +20,8 @@ import {
   LogOut,
   Menu,
   ShieldCheck,
+  Search,
+  Trash2,
   UserRound,
   UsersRound,
   X,
@@ -41,6 +44,71 @@ const userNavItems = [
 // Dữ liệu thật sẽ được nạp từ API dashboard. Null nghĩa là chưa có dữ liệu.
 const attendanceData = null;
 const PHOTO_MAX_BYTES = 30 * 1024;
+
+const IMPORT_SHIFTS = {
+  Sáng: { code: 'MORNING', start: '07:30:00', end: '12:00:00' },
+  Chiều: { code: 'AFTERNOON', start: '13:30:00', end: '17:30:00' },
+  Tối: { code: 'EVENING', start: '17:30:00', end: '20:00:00' },
+};
+
+function cleanName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function parseExcelDate(value) {
+  const match = String(value || '').trim().match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
+  if (!match) return null;
+  const year = match[3] || String(new Date().getFullYear());
+  return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+}
+
+function parseAttendanceWorkbook(buffer) {
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '', raw: false });
+  const datePattern = /^\d{1,2}\/\d{1,2}(?:\/\d{4})?$/;
+  const dateRowIndex = rows.findIndex((row) => row.some((cell) => datePattern.test(String(cell).trim())));
+  if (dateRowIndex < 0) throw new Error('Không tìm thấy dòng tiêu đề ngày tháng trong file Excel.');
+  const headerRows = rows.slice(Math.max(0, dateRowIndex - 3), dateRowIndex + 2);
+  const findColumn = (patterns, fallback) => {
+    for (const row of headerRows) {
+      const index = row.findIndex((cell) => patterns.some((pattern) => pattern.test(String(cell))));
+      if (index >= 0) return index;
+    }
+    return fallback;
+  };
+  const nameColumn = findColumn([/họ\s*&?\s*tên/i, /họ và tên/i], 1);
+  const mssvColumn = findColumn([/mssv/i, /mã.*sinh viên/i], 2);
+  const phoneColumn = findColumn([/sđt/i, /điện thoại/i, /phone/i], 4);
+  const totalColumn = findColumn([/^total$/i, /tổng/i], rows[dateRowIndex].length - 1);
+  const dates = [];
+  let currentDate = null;
+  rows[dateRowIndex].forEach((cell, column) => {
+    const parsed = parseExcelDate(cell);
+    if (parsed) currentDate = parsed;
+    dates[column] = currentDate;
+  });
+  const shifts = rows[dateRowIndex + 1] || [];
+  const members = new Map();
+  const records = [];
+  for (let rowIndex = dateRowIndex + 2; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const combined = row.map((cell) => String(cell).trim()).join(' ');
+    if (!combined || /BẢNG TỔNG HỢP NGÀY CÔNG/i.test(combined)) break;
+    const userName = cleanName(row[nameColumn]);
+    if (!userName || /^stt$/i.test(userName) || /^tổng$/i.test(userName)) continue;
+    const userMSSV = String(row[mssvColumn] || '').trim();
+    const summary = { userName, userMSSV, phone: cleanName(row[phoneColumn]), totalWorkDays: Number(String(row[totalColumn]).replace(',', '.')) || 0, shifts: 0 };
+    for (let column = 0; column < row.length; column += 1) {
+      const shiftName = String(shifts[column] || '').trim();
+      const shift = IMPORT_SHIFTS[shiftName];
+      if (!dates[column] || !shift || !/^x$/i.test(String(row[column]).trim())) continue;
+      summary.shifts += 1;
+      records.push({ userName, userMSSV, date: dates[column], shiftCode: shift.code, totalHours: (new Date(`1970-01-01T${shift.end}`) - new Date(`1970-01-01T${shift.start}`)) / 3600000 });
+    }
+    if (summary.shifts || summary.totalWorkDays) members.set(`${userMSSV}|${userName.toLowerCase()}`, summary);
+  }
+  return { members: [...members.values()], records: records.map((record) => ({ ...record, totalWorkDays: members.get(`${record.userMSSV}|${record.userName.toLowerCase()}`)?.totalWorkDays || 0 })) };
+}
 
 async function compressWebcamFrame(video) {
   const canvas = document.createElement('canvas');
@@ -118,7 +186,7 @@ function LoginScreen({ onLogin, onForgot }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: form.username, password: form.password }),
       });
-      const body = await response.json();
+      const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.success) throw new Error(body.message || 'Đăng nhập thất bại.');
       localStorage.setItem('attendance_token', body.data.token);
       localStorage.setItem('attendance_user', JSON.stringify(body.data.user));
@@ -221,7 +289,7 @@ function NotificationCenter() {
     const token = localStorage.getItem('attendance_token');
     const response = await fetch(`${apiUrl}/notifications`, { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) return;
-    const body = await response.json();
+    const body = await response.json().catch(() => ({}));
     setNotifications(body.data || []);
     setUnreadCount(body.unreadCount || 0);
   }
@@ -441,7 +509,7 @@ function UserPortal({ user }) {
     setFaceModal(false);
   }
   const approvedRecords = records.filter((record) => record.status === 'APPROVED');
-  const workedDays = approvedRecords.length;
+  const workedDays = Number(records[0]?.total_work_days || user.totalWorkDays || 0) || new Set(approvedRecords.map((record) => String(record.attendance_date).slice(0, 10))).size;
   const accumulatedHours = approvedRecords.reduce((total, record) => total + Number(record.total_hours || 0), 0);
   const todayStatus = today?.status === 'PENDING'
     ? 'Chờ duyệt'
@@ -609,6 +677,8 @@ function AdminDashboard({ user }) {
   }
 
   return <div className="admin-dashboard">
+    <ExcelImportCard />
+    <AttendanceManagement />
     <section className="dashboard-intro"><div><span className="section-label">THỨ NĂM, 24 THÁNG 9, 2026</span><h2>Xin chào, {user.role === 'ADMIN' ? 'Quản trị viên' : (user.fullName || user.username)}</h2><p>Tóm tắt hoạt động chấm công và yêu cầu trong ngày hôm nay.</p></div><div className="world-map" aria-label="World map illustration"><span /><span /><span /><span /><span /><span /><span /><span /></div></section>
     <span className="overview-label">OVERVIEW</span>
     <section className="metric-grid dark-metrics"><Metric icon={CalendarCheck} title="Tổng ngày công" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={Clock3} title="Tổng giờ" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={BarChart3} title="Đã chấm hôm nay" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={UsersRound} title="Vai trò ADMIN" value="ADMIN" note="Quyền quản trị hệ thống" chart="user" /></section>
@@ -617,6 +687,104 @@ function AdminDashboard({ user }) {
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
     {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(photoPreview); setPhotoPreview(null); }}><motion.div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(photoPreview); setPhotoPreview(null); }}><X size={18} /></button><img src={photoPreview} alt="Ảnh đối soát khuôn mặt" /></motion.div></motion.div>}
   </div>;
+}
+
+function AttendanceManagement() {
+  const [query, setQuery] = useState('');
+  const [members, setMembers] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [confirm, setConfirm] = useState(null);
+  const [reason, setReason] = useState('');
+  const [message, setMessage] = useState('');
+  const token = localStorage.getItem('attendance_token');
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      fetch(`${apiUrl}/admin/imported-attendance/users?search=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((response) => response.json())
+        .then((body) => setMembers(body.data || []))
+        .catch(() => setMembers([]));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [query]);
+  async function selectMember(member) {
+    const response = await fetch(`${apiUrl}/admin/imported-attendance/users/${member.id}`, { headers: { Authorization: `Bearer ${token}` } });
+    const body = await response.json();
+    if (response.ok && body.success) setSelected(body.data);
+  }
+  async function executeDelete() {
+    const target = confirm;
+    if (!target) return;
+    const endpoint = target.all ? `/admin/imported-attendance/users/${selected.user.id}` : `/admin/imported-attendance/records/${target.record.id}`;
+    const response = await fetch(`${apiUrl}${endpoint}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ reason }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.success) {
+      setMessage(body.message || 'Không thể xóa công.');
+      return;
+    }
+    setMessage(body.message);
+    setConfirm(null);
+    setReason('');
+    await selectMember(selected.user);
+  }
+  return <section className="content-panel attendance-management">
+    <div className="panel-heading"><div><h3>Quản lý & Tra cứu ngày công</h3><p>Tìm kiếm thành viên và điều chỉnh dữ liệu import</p></div></div>
+    <div className="attendance-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập họ tên nhân viên..." /></div>
+    <div className="management-layout"><div className="member-results">{members.map((member) => <button key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`} onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="imported-record-list">{selected.records.map((record) => <div className="imported-record" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}</span><small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'}</small><button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!selected.records.length && <div className="history-empty">Chưa có lịch sử import.</div>}</div></div>}</div>
+    {message && <div className="approval-note">{message}</div>}
+    {confirm && <div className="confirm-inline"><strong>Xác nhận xóa {confirm.all ? 'toàn bộ công' : 'ca này'}?</strong><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" /><button className="danger-button" onClick={executeDelete}>Xác nhận xóa</button><button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy</button></div>}
+  </section>;
+}
+
+function ExcelImportCard() {
+  const [preview, setPreview] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState('');
+  async function readFile(file) {
+    if (!file || !/\.(xlsx|xls)$/i.test(file.name)) {
+      setMessage('Vui lòng chọn file .xlsx hoặc .xls.');
+      return;
+    }
+    setLoading(true);
+    setMessage('');
+    try {
+      const parsed = parseAttendanceWorkbook(await file.arrayBuffer());
+      setPreview(parsed);
+    } catch (error) {
+      setMessage(error.message || 'Không thể đọc file Excel.');
+    } finally {
+      setLoading(false);
+    }
+  }
+  async function confirmImport() {
+    if (!preview) return;
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/admin/attendance/import-excel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ members: preview.members, records: preview.records }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể lưu dữ liệu Excel.');
+      setMessage(`Đã nhập ${body.imported} lượt chấm công${body.unmatched?.length ? `; không khớp ${body.unmatched.length} dòng` : ''}.`);
+      setPreview(null);
+    } catch (error) {
+      console.error('Chi tiết lỗi import Excel:', error);
+      setMessage(error.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+  return <section className="content-panel excel-import-card">
+    <div className="panel-heading"><div><h3>Nhập dữ liệu Excel</h3><p>Import bảng chấm công .xlsx hoặc .xls</p></div><label className="checkout-button excel-upload-button">{loading ? 'Đang xử lý...' : 'Chọn file Excel'}<input type="file" accept=".xlsx,.xls" hidden onChange={(event) => readFile(event.target.files?.[0])} /></label></div>
+    {message && <div className="approval-note">{message}</div>}
+    {preview && <div className="excel-preview"><strong>Đã đọc {preview.members.length} thành viên · {preview.records.length} lượt chấm công</strong><div className="excel-preview-list">{preview.members.slice(0, 5).map((member) => <div key={`${member.userMSSV}-${member.userName}`}><span>{member.userName}</span><small>{member.totalWorkDays || member.shifts} công · {member.shifts} ca</small></div>)}</div><div className="excel-preview-actions"><button className="checkout-button" onClick={confirmImport} disabled={loading}>Xác nhận lưu vào hệ thống</button><button className="modal-close" onClick={() => setPreview(null)} aria-label="Hủy import"><X size={18} /></button></div></div>}
+  </section>;
 }
 
 function Metric({ icon: Icon, title, value, note, chart }) { return <motion.div className="metric-card" whileHover={{ y: -3 }}><div className="metric-top"><div className="metric-icon"><Icon size={18} /></div>{chart === 'gauge' && <div className="mini-gauge" />}{chart === 'line' && <svg className="mini-line" viewBox="0 0 70 32"><polyline points="0,25 12,20 22,23 33,10 45,15 56,5 70,8" /></svg>}{chart === 'donut' && <div className="mini-donut" />}{chart === 'user' && <div className="mini-user"><UserRound size={17} /></div>}</div><span>{title}</span><strong>{value}</strong><small>{note}</small></motion.div>; }

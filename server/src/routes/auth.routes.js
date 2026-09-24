@@ -19,7 +19,7 @@ router.post('/login', async (request, response, next) => {
     }
 
     const [rows] = await pool.execute(
-      'SELECT id, full_name, username, password_hash, role, face_registered, must_change_password, phone, address, hometown_province_code, hometown_province_name FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
+      'SELECT id, full_name, username, password_hash, role, face_registered, must_change_password, total_work_days, phone, address, hometown_province_code, hometown_province_name FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
       [username.trim()],
     );
     const user = rows[0];
@@ -52,6 +52,7 @@ router.post('/login', async (request, response, next) => {
           role: user.role,
           faceRegistered: Boolean(user.face_registered),
           mustChangePassword: Boolean(user.must_change_password),
+          totalWorkDays: Number(user.total_work_days || 0),
           phone: user.phone,
           address: user.address,
           hometownProvinceCode: user.hometown_province_code,
@@ -67,7 +68,7 @@ router.post('/login', async (request, response, next) => {
 router.get('/me', authenticate, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT id, full_name, username, role, face_registered, phone, address, hometown_province_code, hometown_province_name FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, full_name, username, role, face_registered, total_work_days, phone, address, hometown_province_code, hometown_province_name FROM users WHERE id = ? LIMIT 1',
       [request.user.userId],
     );
     if (!rows[0]) {

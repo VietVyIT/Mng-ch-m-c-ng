@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcrypt';
 import { pool } from '../config/database.js';
 import { authenticate, authorize } from '../middlewares/auth.middleware.js';
 import { DEFAULT_SHIFTS } from '../config/shifts.js';
@@ -6,6 +7,216 @@ import { createNotification } from '../utils/notifications.js';
 
 const router = Router();
 router.use(authenticate, authorize('ADMIN'));
+
+async function ensureImportedAttendanceTable(connection) {
+  const [columns] = await connection.execute(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'total_work_days' LIMIT 1`,
+  );
+  if (!columns.length) {
+    await connection.execute('ALTER TABLE users ADD COLUMN total_work_days DECIMAL(8,2) NOT NULL DEFAULT 0');
+  }
+  await connection.execute(
+    `CREATE TABLE IF NOT EXISTS imported_attendance_records (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id BIGINT UNSIGNED NOT NULL,
+      attendance_date DATE NOT NULL,
+      shift_code VARCHAR(20) NOT NULL,
+      shift_name VARCHAR(80) NOT NULL,
+      shift_start TIME NOT NULL,
+      shift_end TIME NOT NULL,
+      check_in DATETIME NULL,
+      check_out DATETIME NULL,
+      total_hours DECIMAL(6,2) NOT NULL,
+      status ENUM('APPROVED') NOT NULL DEFAULT 'APPROVED',
+      imported_from_excel BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_imported_attendance (user_id, attendance_date, shift_code),
+      KEY idx_imported_user_date (user_id, attendance_date),
+      CONSTRAINT fk_imported_attendance_user FOREIGN KEY (user_id) REFERENCES users (id)
+        ON UPDATE CASCADE ON DELETE CASCADE
+    ) ENGINE=InnoDB`,
+  );
+}
+
+router.post('/attendance/import-excel', async (request, response, next) => {
+  const records = Array.isArray(request.body.records) ? request.body.records : [];
+  const members = Array.isArray(request.body.members) ? request.body.members : [];
+  if ((!records.length && !members.length) || records.length > 5000 || members.length > 1000) {
+    return response.status(400).json({ success: false, message: 'Dữ liệu import phải có từ 1 đến 5.000 lượt chấm công.' });
+  }
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    await ensureImportedAttendanceTable(connection);
+    const unmatched = [];
+    const userIds = new Map();
+    const defaultPasswordHash = await bcrypt.hash('user123@', 12);
+    for (const member of members) {
+      const name = typeof member.userName === 'string' ? member.userName.trim().replace(/\s+/g, ' ') : '';
+      const mssv = typeof member.userMSSV === 'string' ? member.userMSSV.trim() : '';
+      const phone = typeof member.phone === 'string' ? member.phone.trim().slice(0, 30) : '';
+      const totalWorkDays = Number(member.totalWorkDays) || 0;
+      if (!name) continue;
+      const [existing] = await connection.execute(
+        `SELECT id FROM users
+         WHERE (role = 'USER' AND ((? <> '' AND student_code = ?) OR LOWER(TRIM(full_name)) = LOWER(?)))
+         LIMIT 1`,
+        [mssv, mssv, name],
+      );
+      let userId = existing[0]?.id;
+      if (userId) {
+        await connection.execute(
+          `UPDATE users SET full_name = ?, student_code = NULLIF(?, ''), phone = NULLIF(?, ''),
+           total_work_days = ? WHERE id = ?`,
+          [name, mssv, phone, totalWorkDays, userId],
+        );
+      } else {
+        const [created] = await connection.execute(
+          `INSERT INTO users
+           (full_name, student_code, phone, username, password_hash, role, must_change_password, total_work_days)
+           VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?)`,
+          [name, mssv, phone, name, defaultPasswordHash, totalWorkDays],
+        );
+        userId = created.insertId;
+      }
+      userIds.set(`${mssv}|${name.toLowerCase()}`, userId);
+    }
+    let imported = 0;
+    for (const record of records) {
+      const name = typeof record.userName === 'string' ? record.userName.trim().replace(/\s+/g, ' ') : '';
+      const mssv = typeof record.userMSSV === 'string' ? record.userMSSV.trim() : '';
+      const userId = userIds.get(`${mssv}|${name.toLowerCase()}`);
+      if (!userId) {
+        unmatched.push({ userName: name, userMSSV: mssv });
+        continue;
+      }
+      const validDate = /^\d{4}-\d{2}-\d{2}$/.test(record.date);
+      const allowedShifts = { MORNING: ['Ca sáng', '07:30:00', '12:00:00'], AFTERNOON: ['Ca chiều', '13:30:00', '17:30:00'], EVENING: ['Ca tối', '17:30:00', '20:00:00'] };
+      const shift = allowedShifts[record.shiftCode];
+      if (!validDate || !shift) continue;
+      await connection.execute(
+        `INSERT INTO imported_attendance_records
+          (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, check_out, total_hours)
+         VALUES (?, ?, ?, ?, ?, ?, CONCAT(?, ' ', ?), CONCAT(?, ' ', ?), ?)
+         ON DUPLICATE KEY UPDATE check_in = VALUES(check_in), check_out = VALUES(check_out), total_hours = VALUES(total_hours)`,
+        [userId, record.date, record.shiftCode, shift[0], shift[1], shift[2], record.date, shift[1], record.date, shift[2], Number(record.totalHours) || 0],
+      );
+      imported += 1;
+    }
+    await connection.commit();
+    return response.status(201).json({ success: true, imported, unmatched });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+router.get('/imported-attendance/users', async (request, response, next) => {
+  const search = typeof request.query.search === 'string' ? request.query.search.trim().slice(0, 100) : '';
+  try {
+    await ensureImportedAttendanceTable(pool);
+    const [rows] = await pool.execute(
+      `SELECT id, full_name, username, student_code, phone, total_work_days
+       FROM users WHERE role = 'USER' AND (? = '' OR LOWER(full_name) LIKE LOWER(?))
+       ORDER BY full_name LIMIT 100`,
+      [search, `%${search}%`],
+    );
+    return response.json({ success: true, data: rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/imported-attendance/users/:userId', async (request, response, next) => {
+  try {
+    const [users] = await pool.execute(
+      'SELECT id, full_name, username, student_code, phone, total_work_days FROM users WHERE id = ? AND role = \'USER\' LIMIT 1',
+      [request.params.userId],
+    );
+    if (!users[0]) return response.status(404).json({ success: false, message: 'Không tìm thấy thành viên.' });
+    const [records] = await pool.execute(
+      `SELECT id, attendance_date, shift_code, shift_name, check_in, check_out, total_hours
+       FROM imported_attendance_records WHERE user_id = ?
+       ORDER BY attendance_date DESC, shift_start`,
+      [request.params.userId],
+    );
+    return response.json({ success: true, data: { user: users[0], records } });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.delete('/imported-attendance/records/:recordId', async (request, response, next) => {
+  const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : '';
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT r.id, r.user_id, r.attendance_date, r.shift_name, u.full_name
+       FROM imported_attendance_records r JOIN users u ON u.id = r.user_id
+       WHERE r.id = ? FOR UPDATE`,
+      [request.params.recordId],
+    );
+    if (!rows[0]) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy ca chấm công.' });
+    }
+    const record = rows[0];
+    await connection.execute('DELETE FROM imported_attendance_records WHERE id = ?', [record.id]);
+    await connection.execute('UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0) WHERE id = ?', [record.user_id]);
+    const dateInfo = `${record.shift_name} - Ngày ${new Date(record.attendance_date).toLocaleDateString('vi-VN')}`;
+    await createNotification(connection, {
+      recipientId: record.user_id,
+      type: 'ATTENDANCE_DELETED',
+      title: 'Bạn đã bị xóa chấm công',
+      message: `Bản ghi chấm công ${dateInfo} đã bị xóa.${reason ? ` Lý do: ${reason}` : ''}`,
+      dateInfo,
+      reason: reason || null,
+    });
+    await connection.commit();
+    return response.json({ success: true, message: `Đã xóa ca của ${record.full_name}.` });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+router.delete('/imported-attendance/users/:userId', async (request, response, next) => {
+  const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : '';
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [users] = await connection.execute('SELECT id, full_name FROM users WHERE id = ? AND role = \'USER\' FOR UPDATE', [request.params.userId]);
+    if (!users[0]) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy thành viên.' });
+    }
+    await connection.execute('DELETE FROM imported_attendance_records WHERE user_id = ?', [request.params.userId]);
+    await connection.execute('DELETE FROM attendance WHERE user_id = ?', [request.params.userId]);
+    await connection.execute('UPDATE users SET total_work_days = 0 WHERE id = ?', [request.params.userId]);
+    await createNotification(connection, {
+      recipientId: request.params.userId,
+      type: 'ATTENDANCE_DELETED',
+      title: 'Bạn đã bị xóa chấm công',
+      message: `Toàn bộ lịch sử chấm công của bạn đã bị xóa.${reason ? ` Lý do: ${reason}` : ''}`,
+      dateInfo: 'Toàn bộ lịch sử',
+      reason: reason || null,
+    });
+    await connection.commit();
+    return response.json({ success: true, message: `Đã xóa toàn bộ công của ${users[0].full_name}.` });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+});
 
 router.post('/announcements', async (request, response, next) => {
   const title = typeof request.body.title === 'string' ? request.body.title.trim().slice(0, 255) : '';

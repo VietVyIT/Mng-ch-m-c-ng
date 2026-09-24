@@ -16,13 +16,14 @@ const app = express();
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(cors({ origin: env.clientUrl }));
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '10mb' }));
 app.use('/api/auth/login', rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 5 * 60 * 1000,
   limit: 10,
+  skipSuccessfulRequests: true,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  message: { success: false, message: 'Quá nhiều lần đăng nhập thất bại. Vui lòng thử lại sau 15 phút.', errorCode: 'RATE_LIMITED' },
+  message: { success: false, message: 'Bạn đã nhập sai quá 10 lần. Vui lòng thử lại sau 5 phút.', errorCode: 'RATE_LIMITED' },
 }));
 app.use('/api/health', healthRoutes);
 app.use('/api/auth', authRoutes);

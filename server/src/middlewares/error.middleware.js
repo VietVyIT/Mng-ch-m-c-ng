@@ -1,8 +1,8 @@
-export function errorMiddleware(error, _request, response, _next) {
-  console.error(error);
+export function errorMiddleware(error, request, response, _next) {
+  console.error(`[${request.method} ${request.originalUrl}]`, error);
   const status = error.type === 'entity.too.large' ? 413 : 500;
   const message = error.type === 'entity.too.large'
-    ? 'Ảnh chụp quá lớn. Vui lòng thử lại.'
+    ? 'Dữ liệu gửi lên quá lớn. Vui lòng giảm kích thước file và thử lại.'
     : 'Internal server error';
   response.status(status).json({
     success: false,
