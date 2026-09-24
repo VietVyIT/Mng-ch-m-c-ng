@@ -120,7 +120,9 @@ router.get('/imported-attendance/users', async (request, response, next) => {
   try {
     await ensureImportedAttendanceTable(pool);
     const [rows] = await pool.execute(
-      `SELECT id, full_name, username, student_code, phone, total_work_days
+      `SELECT id, full_name, username, student_code, phone, address,
+              hometown_province_code, hometown_province_name, total_work_days,
+              face_registered, must_change_password, created_at, updated_at
        FROM users WHERE role = 'USER' AND (? = '' OR LOWER(full_name) LIKE LOWER(?))
        ORDER BY full_name LIMIT 100`,
       [search, `%${search}%`],
@@ -133,8 +135,12 @@ router.get('/imported-attendance/users', async (request, response, next) => {
 
 router.get('/imported-attendance/users/:userId', async (request, response, next) => {
   try {
+    await ensureImportedAttendanceTable(pool);
     const [users] = await pool.execute(
-      'SELECT id, full_name, username, student_code, phone, total_work_days FROM users WHERE id = ? AND role = \'USER\' LIMIT 1',
+      `SELECT id, full_name, username, student_code, phone, address,
+              hometown_province_code, hometown_province_name, total_work_days,
+              face_registered, must_change_password, created_at, updated_at
+       FROM users WHERE id = ? AND role = 'USER' LIMIT 1`,
       [request.params.userId],
     );
     if (!users[0]) return response.status(404).json({ success: false, message: 'Không tìm thấy thành viên.' });
@@ -144,7 +150,23 @@ router.get('/imported-attendance/users/:userId', async (request, response, next)
        ORDER BY attendance_date DESC, shift_start`,
       [request.params.userId],
     );
-    return response.json({ success: true, data: { user: users[0], records } });
+    const [cameraRecords] = await pool.execute(
+      `SELECT a.id, a.attendance_date, a.shift_code, a.shift_name, a.check_in, a.check_out,
+              a.total_hours, a.status
+       FROM attendance a WHERE a.user_id = ? AND a.status = 'APPROVED'
+       ORDER BY a.attendance_date DESC, a.shift_start`,
+      [request.params.userId],
+    );
+    return response.json({
+      success: true,
+      data: {
+        user: users[0],
+        records: [
+          ...records.map((record) => ({ ...record, source: 'Excel Import' })),
+          ...cameraRecords.map((record) => ({ ...record, source: 'Camera', imported_from_excel: false })),
+        ].sort((a, b) => new Date(b.attendance_date) - new Date(a.attendance_date)),
+      },
+    });
   } catch (error) {
     return next(error);
   }
@@ -210,6 +232,49 @@ router.delete('/imported-attendance/users/:userId', async (request, response, ne
     });
     await connection.commit();
     return response.json({ success: true, message: `Đã xóa toàn bộ công của ${users[0].full_name}.` });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+router.delete('/imported-attendance/bulk-users', async (request, response, next) => {
+  const userIds = Array.isArray(request.body?.userIds)
+    ? [...new Set(request.body.userIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))]
+    : [];
+  const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : '';
+  if (!userIds.length || userIds.length > 500) {
+    return response.status(400).json({ success: false, message: 'Vui lòng chọn từ 1 đến 500 sinh viên.' });
+  }
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const placeholders = userIds.map(() => '?').join(',');
+    const [users] = await connection.execute(
+      `SELECT id, full_name FROM users WHERE role = 'USER' AND id IN (${placeholders}) FOR UPDATE`,
+      userIds,
+    );
+    if (!users.length) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy sinh viên hợp lệ.' });
+    }
+    await connection.execute(`DELETE FROM imported_attendance_records WHERE user_id IN (${placeholders})`, userIds);
+    await connection.execute(`DELETE FROM attendance WHERE user_id IN (${placeholders})`, userIds);
+    await connection.execute(`UPDATE users SET total_work_days = 0 WHERE id IN (${placeholders})`, userIds);
+    for (const user of users) {
+      await createNotification(connection, {
+        recipientId: user.id,
+        type: 'ATTENDANCE_DELETED',
+        title: 'Bạn đã bị xóa chấm công',
+        message: `Toàn bộ lịch sử chấm công của bạn đã bị xóa.${reason ? ` Lý do: ${reason}` : ''}`,
+        dateInfo: 'Toàn bộ lịch sử',
+        reason: reason || null,
+      });
+    }
+    await connection.commit();
+    return response.json({ success: true, deletedCount: users.length, message: `Đã xóa toàn bộ công của ${users.length} sinh viên.` });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -307,6 +372,7 @@ router.get('/approvals/:eventId/image', async (request, response, next) => {
 
 router.get('/attendance', async (_request, response, next) => {
   try {
+    await ensureImportedAttendanceTable(pool);
     await pool.execute(
       `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
        WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
@@ -328,7 +394,14 @@ router.get('/attendance', async (_request, response, next) => {
        ORDER BY a.attendance_date DESC, a.check_in DESC, ci.captured_at DESC
        LIMIT 500`,
     );
-    return response.json({ success: true, data: rows });
+    const [importedRows] = await pool.execute(
+      `SELECT r.id, r.user_id, r.attendance_date, r.shift_name, r.shift_start, r.shift_end,
+              r.check_in, r.check_out, r.total_hours, r.status, NULL AS punctuality_status,
+              u.full_name, u.username, 'Excel Import' AS source
+       FROM imported_attendance_records r JOIN users u ON u.id = r.user_id
+       ORDER BY r.attendance_date DESC, r.check_in DESC LIMIT 1000`,
+    );
+    return response.json({ success: true, data: [...rows.map((row) => ({ ...row, source: 'Camera' })), ...importedRows].sort((a, b) => new Date(b.attendance_date) - new Date(a.attendance_date)) });
   } catch (error) {
     return next(error);
   }
@@ -379,6 +452,13 @@ router.delete('/attendance/:attendanceId', async (request, response, next) => {
     await connection.execute(
       'INSERT INTO attendance_deletion_logs (attendance_id, deleted_by, reason) VALUES (?, ?, ?)',
       [request.params.attendanceId, request.user.userId, reason || null],
+    );
+    await connection.execute(
+      `UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0)
+       WHERE id = ? AND EXISTS (
+         SELECT 1 FROM attendance WHERE id = ? AND status = 'APPROVED'
+       )`,
+      [rows[0].user_id, request.params.attendanceId],
     );
     await connection.execute('DELETE FROM attendance WHERE id = ?', [request.params.attendanceId]);
     await connection.commit();
@@ -433,6 +513,9 @@ router.patch('/approvals/:eventId', async (request, response, next) => {
     );
     const nextAttendanceStatus = status === 'REJECTED' ? 'REJECTED' : Number(pending[0].count) === 0 ? 'APPROVED' : 'PENDING';
     await connection.execute('UPDATE attendance SET status = ? WHERE id = ?', [nextAttendanceStatus, attendanceId]);
+    if (status === 'APPROVED' && events[0].event_type === 'CHECK_IN') {
+      await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [events[0].user_id]);
+    }
     await connection.commit();
     return response.json({ success: true, status });
   } catch (error) {

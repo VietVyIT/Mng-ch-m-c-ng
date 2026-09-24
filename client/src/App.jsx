@@ -33,6 +33,7 @@ const adminNavItems = [
   { label: 'Dashboard', icon: LayoutDashboard },
   { label: 'Chấm công', icon: CalendarCheck },
   { label: 'Lịch sử', icon: FileClock },
+  { label: 'Quản lý sinh viên', icon: UsersRound },
   { label: 'Hồ sơ', icon: UserRound },
 ];
 const userNavItems = [
@@ -77,7 +78,7 @@ function parseAttendanceWorkbook(buffer) {
     return fallback;
   };
   const nameColumn = findColumn([/họ\s*&?\s*tên/i, /họ và tên/i], 1);
-  const mssvColumn = findColumn([/mssv/i, /mã.*sinh viên/i], 2);
+  const mssvColumn = findColumn([/mssv/i, /mã\s*sinh\s*viên/i, /mã\s*sv/i], 2);
   const phoneColumn = findColumn([/sđt/i, /điện thoại/i, /phone/i], 4);
   const totalColumn = findColumn([/^total$/i, /tổng/i], rows[dateRowIndex].length - 1);
   const dates = [];
@@ -336,6 +337,7 @@ function PageContent({ page, user, onUserUpdated }) {
     if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
     return <UserPortal user={user} />;
   }
+  if (page === 'Quản lý sinh viên') return <StudentManagement />;
   if (page === 'Chấm công') return <AdminAttendanceWorkArea user={user} />;
   if (page === 'Lịch sử') return <AttendanceHistory user={user} />;
   if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
@@ -398,7 +400,7 @@ function AdminAttendanceWorkArea({ user }) {
 }
 
 function UserProfile({ user, onUserUpdated }) {
-  const [profile, setProfile] = useState({ fullName: user.fullName || '', phone: user.phone || '', address: user.address || '', hometownProvinceCode: user.hometownProvinceCode || '', hometownProvinceName: user.hometownProvinceName || '' });
+  const [profile, setProfile] = useState({ fullName: user.fullName || '', studentCode: user.studentCode || '', phone: user.phone || '', address: user.address || '', hometownProvinceCode: user.hometownProvinceCode || '', hometownProvinceName: user.hometownProvinceName || '' });
   const [provinces, setProvinces] = useState([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -428,7 +430,7 @@ function UserProfile({ user, onUserUpdated }) {
       const response = await fetch(`${apiUrl}/auth/profile`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(profile) });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật hồ sơ.');
-      const updatedUser = { ...user, fullName: body.data.full_name, phone: body.data.phone, address: body.data.address, hometownProvinceCode: body.data.hometown_province_code, hometownProvinceName: body.data.hometown_province_name };
+      const updatedUser = { ...user, fullName: body.data.full_name, studentCode: body.data.student_code, phone: body.data.phone, address: body.data.address, hometownProvinceCode: body.data.hometown_province_code, hometownProvinceName: body.data.hometown_province_name };
       onUserUpdated(updatedUser);
       setMessage(body.message);
     } catch (requestError) {
@@ -462,7 +464,7 @@ function UserProfile({ user, onUserUpdated }) {
   }
 
   return <section className="profile-page"><div className="profile-page-heading"><span className="section-label">MY PROFILE</span><h2>Hồ sơ cá nhân</h2><p>Cập nhật thông tin liên hệ hoặc đổi mật khẩu khi cần.</p></div><div className="profile-grid">
-    <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={user.username} disabled /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
+    <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={user.username} disabled /></label><label>MSSV<input value={profile.studentCode} onChange={(event) => setProfile({ ...profile, studentCode: event.target.value })} placeholder="Nhập mã số sinh viên" /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
     <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>Mật khẩu mới cần có ít nhất 6 ký tự.</p></div><LockKeyhole size={20} /></div><label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label><label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
   </div></section>;
 }
@@ -561,7 +563,10 @@ function AttendanceHistory({ user }) {
     setError('');
     try {
       const token = localStorage.getItem('attendance_token');
-      const response = await fetch(`${apiUrl}/admin/attendance/${record.id}`, {
+      const deleteEndpoint = record.source === 'Excel Import'
+        ? `${apiUrl}/admin/imported-attendance/records/${record.id}`
+        : `${apiUrl}/admin/attendance/${record.id}`;
+      const response = await fetch(deleteEndpoint, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ reason: deleteReason }),
@@ -677,8 +682,6 @@ function AdminDashboard({ user }) {
   }
 
   return <div className="admin-dashboard">
-    <ExcelImportCard />
-    <AttendanceManagement />
     <section className="dashboard-intro"><div><span className="section-label">THỨ NĂM, 24 THÁNG 9, 2026</span><h2>Xin chào, {user.role === 'ADMIN' ? 'Quản trị viên' : (user.fullName || user.username)}</h2><p>Tóm tắt hoạt động chấm công và yêu cầu trong ngày hôm nay.</p></div><div className="world-map" aria-label="World map illustration"><span /><span /><span /><span /><span /><span /><span /><span /></div></section>
     <span className="overview-label">OVERVIEW</span>
     <section className="metric-grid dark-metrics"><Metric icon={CalendarCheck} title="Tổng ngày công" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={Clock3} title="Tổng giờ" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={BarChart3} title="Đã chấm hôm nay" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={UsersRound} title="Vai trò ADMIN" value="ADMIN" note="Quyền quản trị hệ thống" chart="user" /></section>
@@ -689,10 +692,11 @@ function AdminDashboard({ user }) {
   </div>;
 }
 
-function AttendanceManagement() {
+function StudentManagement() {
   const [query, setQuery] = useState('');
   const [members, setMembers] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
   const [confirm, setConfirm] = useState(null);
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
@@ -714,7 +718,11 @@ function AttendanceManagement() {
   async function executeDelete() {
     const target = confirm;
     if (!target) return;
-    const endpoint = target.all ? `/admin/imported-attendance/users/${selected.user.id}` : `/admin/imported-attendance/records/${target.record.id}`;
+    const endpoint = target.all
+      ? `/admin/imported-attendance/users/${selected.user.id}`
+      : target.record.source === 'Camera'
+        ? `/admin/attendance/${target.record.id}`
+        : `/admin/imported-attendance/records/${target.record.id}`;
     const response = await fetch(`${apiUrl}${endpoint}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -730,13 +738,43 @@ function AttendanceManagement() {
     setReason('');
     await selectMember(selected.user);
   }
-  return <section className="content-panel attendance-management">
-    <div className="panel-heading"><div><h3>Quản lý & Tra cứu ngày công</h3><p>Tìm kiếm thành viên và điều chỉnh dữ liệu import</p></div></div>
+  const allVisibleSelected = members.length > 0 && members.every((member) => selectedIds.includes(member.id));
+  function toggleMember(memberId) {
+    setSelectedIds((current) => current.includes(memberId)
+      ? current.filter((id) => id !== memberId)
+      : [...current, memberId]);
+  }
+  function toggleAllVisible() {
+    setSelectedIds(allVisibleSelected ? [] : members.map((member) => member.id));
+  }
+  async function executeBulkDelete() {
+    const response = await fetch(`${apiUrl}/admin/imported-attendance/bulk-users`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ userIds: selectedIds, reason }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || !body.success) {
+      setMessage(body.message || 'Không thể xóa công đã chọn.');
+      return;
+    }
+    setMessage(body.message);
+    setSelectedIds([]);
+    setConfirm(null);
+    setReason('');
+    setSelected(null);
+    const refresh = await fetch(`${apiUrl}/admin/imported-attendance/users?search=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` } });
+    const refreshBody = await refresh.json();
+    setMembers(refreshBody.data || []);
+  }
+  return <div className="student-management-page"><ExcelImportCard /><section className="content-panel attendance-management">
+    <div className="panel-heading"><div><h3>Quản lý & Tra cứu ngày công</h3><p>Tìm kiếm thành viên và điều chỉnh dữ liệu import</p></div>{selectedIds.length > 0 && <button className="danger-button" onClick={() => setConfirm({ bulk: true })}><Trash2 size={15} /> Xóa công đã chọn ({selectedIds.length})</button>}</div>
     <div className="attendance-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập họ tên nhân viên..." /></div>
-    <div className="management-layout"><div className="member-results">{members.map((member) => <button key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`} onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="imported-record-list">{selected.records.map((record) => <div className="imported-record" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}</span><small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'}</small><button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!selected.records.length && <div className="history-empty">Chưa có lịch sử import.</div>}</div></div>}</div>
+    <div className="select-all-row"><label><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} /> Chọn tất cả sinh viên đang hiển thị</label><small>{selectedIds.length} đã chọn</small></div>
+    <div className="management-layout"><div className="member-results">{members.map((member) => <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} /><button type="button" className="member-result-content" onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button></div>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="user-info-grid"><div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div><div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div><div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div><div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div><div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div><div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div></div><div className="imported-record-list">{selected.records.map((record) => <div className="imported-record" key={`${record.source}-${record.id}`}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span><small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small><button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!selected.records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div>}</div>
     {message && <div className="approval-note">{message}</div>}
-    {confirm && <div className="confirm-inline"><strong>Xác nhận xóa {confirm.all ? 'toàn bộ công' : 'ca này'}?</strong><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" /><button className="danger-button" onClick={executeDelete}>Xác nhận xóa</button><button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy</button></div>}
-  </section>;
+    {confirm && <div className="confirm-inline"><strong>Xác nhận xóa {confirm.bulk ? `toàn bộ công của ${selectedIds.length} sinh viên` : confirm.all ? 'toàn bộ công' : 'ca này'}?</strong><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" /><button className="danger-button" onClick={confirm.bulk ? executeBulkDelete : executeDelete}>Xác nhận xóa</button><button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy</button></div>}
+  </section></div>;
 }
 
 function ExcelImportCard() {

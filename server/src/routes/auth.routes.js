@@ -19,7 +19,7 @@ router.post('/login', async (request, response, next) => {
     }
 
     const [rows] = await pool.execute(
-      'SELECT id, full_name, username, password_hash, role, face_registered, must_change_password, total_work_days, phone, address, hometown_province_code, hometown_province_name FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
+      'SELECT id, full_name, username, password_hash, role, face_registered, must_change_password, total_work_days, student_code, phone, address, hometown_province_code, hometown_province_name FROM users WHERE LOWER(username) = LOWER(?) LIMIT 1',
       [username.trim()],
     );
     const user = rows[0];
@@ -53,6 +53,7 @@ router.post('/login', async (request, response, next) => {
           faceRegistered: Boolean(user.face_registered),
           mustChangePassword: Boolean(user.must_change_password),
           totalWorkDays: Number(user.total_work_days || 0),
+          studentCode: user.student_code,
           phone: user.phone,
           address: user.address,
           hometownProvinceCode: user.hometown_province_code,
@@ -68,7 +69,7 @@ router.post('/login', async (request, response, next) => {
 router.get('/me', authenticate, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT id, full_name, username, role, face_registered, total_work_days, phone, address, hometown_province_code, hometown_province_name FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, full_name, username, role, face_registered, total_work_days, student_code, phone, address, hometown_province_code, hometown_province_name FROM users WHERE id = ? LIMIT 1',
       [request.user.userId],
     );
     if (!rows[0]) {
@@ -82,28 +83,39 @@ router.get('/me', authenticate, async (request, response, next) => {
 
 router.patch('/profile', authenticate, async (request, response, next) => {
   try {
-    const { fullName, phone, address, hometownProvinceCode, hometownProvinceName } = request.body;
+    const { fullName, studentCode, phone, address, hometownProvinceCode, hometownProvinceName } = request.body;
     if (!fullName?.trim()) {
       return response.status(400).json({ success: false, message: 'Họ và tên không được để trống.', errorCode: 'VALIDATION_ERROR' });
     }
     if (phone && !/^[0-9+()\-\s]{8,20}$/.test(phone.trim())) {
       return response.status(400).json({ success: false, message: 'Số điện thoại không hợp lệ.', errorCode: 'VALIDATION_ERROR' });
     }
-    await pool.execute(
-      `UPDATE users
-       SET full_name = ?, phone = ?, address = ?, hometown_province_code = ?, hometown_province_name = ?
-       WHERE id = ?`,
-      [
-        fullName.trim(),
-        phone?.trim() || null,
-        address?.trim() || null,
-        hometownProvinceCode || null,
-        hometownProvinceName?.trim() || null,
-        request.user.userId,
-      ],
-    );
+    if (studentCode && !/^[A-Za-z0-9._-]{2,30}$/.test(studentCode.trim())) {
+      return response.status(400).json({ success: false, message: 'MSSV không hợp lệ.', errorCode: 'VALIDATION_ERROR' });
+    }
+    try {
+      await pool.execute(
+        `UPDATE users
+         SET full_name = ?, student_code = ?, phone = ?, address = ?, hometown_province_code = ?, hometown_province_name = ?
+         WHERE id = ?`,
+        [
+          fullName.trim(),
+          studentCode?.trim() || null,
+          phone?.trim() || null,
+          address?.trim() || null,
+          hometownProvinceCode || null,
+          hometownProvinceName?.trim() || null,
+          request.user.userId,
+        ],
+      );
+    } catch (error) {
+      if (error.code === 'ER_DUP_ENTRY') {
+        return response.status(409).json({ success: false, message: 'MSSV này đã được gán cho tài khoản khác.', errorCode: 'DUPLICATE_STUDENT_CODE' });
+      }
+      throw error;
+    }
     const [rows] = await pool.execute(
-      'SELECT id, full_name, username, role, face_registered, phone, address, hometown_province_code, hometown_province_name FROM users WHERE id = ? LIMIT 1',
+      'SELECT id, full_name, username, role, face_registered, student_code, phone, address, hometown_province_code, hometown_province_name FROM users WHERE id = ? LIMIT 1',
       [request.user.userId],
     );
     return response.json({ success: true, data: rows[0], message: 'Đã cập nhật thông tin cá nhân.' });
