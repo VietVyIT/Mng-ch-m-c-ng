@@ -69,6 +69,12 @@ Sau khi cập nhật cấu trúc database, chạy migration:
 # database/migrations/007_user_profiles.sql
 ```
 
+### Khung giờ ca làm việc
+
+- Ca sáng: 07:30–12:00
+- Ca chiều: 13:30–17:30
+- Ca tối: 17:30–20:00 (có thể bật/tắt theo ngày bởi Admin)
+
 > Tài khoản và dữ liệu mẫu chỉ dành cho môi trường phát triển local, không dùng trong production.
 
 Các mục Chấm công, Lịch sử và Hồ sơ yêu cầu đăng nhập. JWT được gửi qua header

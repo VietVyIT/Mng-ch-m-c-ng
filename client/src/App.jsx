@@ -159,6 +159,10 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+  function goToHome() {
+    onNavigate(user.role === 'USER' ? 'Chấm công' : 'Dashboard');
+    scrollToTop();
+  }
   return (
     <div className="dashboard-app">
       {mobileMenu && <button className="sidebar-backdrop" aria-label="Đóng menu" onClick={() => setMobileMenu(false)} />}
@@ -169,7 +173,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
         <div className="sidebar-bottom"><div className="account-card"><div className="user-avatar">{user.fullName?.charAt(0) || 'U'}</div><div><strong>{user.fullName || user.username}</strong><small>{user.role === 'ADMIN' ? 'Quản trị viên' : 'Người dùng'}</small></div></div><button className="sidebar-link logout-link" onClick={onLogout}><LogOut size={18} />Đăng xuất</button></div>
       </aside>
       <main className="dashboard-main">
-        <header className="dashboard-header"><button className="mobile-menu-button" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div><span className="section-label">THỨ NĂM, 24 THÁNG 9, 2026</span><h1>{page}</h1></div><div className="header-user"><NotificationCenter /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
+        <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><span className="section-label">THỨ NĂM, 24 THÁNG 9, 2026</span><h1>{page}</h1></div><div className="header-user"><NotificationCenter /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
         <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} /></motion.div></AnimatePresence>
       </main>
     </div>
