@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Chart from 'chart.js/auto';
 import * as faceapi from '@vladmandic/face-api';
 import * as XLSX from 'xlsx';
@@ -144,7 +144,17 @@ async function compressWebcamFrame(video) {
 }
 
 function App() {
-  const [user, setUser] = useState(() => JSON.parse(localStorage.getItem('attendance_user') || 'null'));
+  const [user, setUser] = useState(() => {
+    try {
+      const stored = localStorage.getItem('attendance_user');
+      return stored && stored !== 'undefined' ? JSON.parse(stored) : null;
+    } catch (err) {
+      console.error('Lỗi phân tích dữ liệu user từ localStorage:', err);
+      localStorage.removeItem('attendance_user');
+      localStorage.removeItem('attendance_token');
+      return null;
+    }
+  });
   const [page, setPage] = useState(() => user?.role === 'USER' ? 'Chấm công' : 'Dashboard');
   const [showLogin, setShowLogin] = useState(!user);
   const [showForgot, setShowForgot] = useState(false);
@@ -251,7 +261,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
         <div className="sidebar-bottom"><div className="account-card"><div className="user-avatar">{user.fullName?.charAt(0) || 'U'}</div><div><strong>{user.fullName || user.username}</strong><small>{user.role === 'ADMIN' ? 'Quản trị viên' : 'Người dùng'}</small></div></div><button className="sidebar-link logout-link" onClick={onLogout}><LogOut size={18} />Đăng xuất</button></div>
       </aside>
       <main className="dashboard-main">
-        <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><span className="section-label">THỨ NĂM, 24 THÁNG 9, 2026</span><h1>{page}</h1></div><div className="header-user"><NotificationCenter /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
+        <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><h1>{page}</h1></div><div className="header-user"><NotificationCenter /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
         <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} /></motion.div></AnimatePresence>
       </main>
     </div>
@@ -605,6 +615,13 @@ function AdminDashboard({ user }) {
   const [todayShift, setTodayShift] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const hasAttendanceData = Array.isArray(attendanceData) && attendanceData.length > 0;
+  const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(new Date());
+
   useEffect(() => {
     const token = localStorage.getItem('attendance_token');
     fetch(`${apiUrl}/attendance/today`, { headers: { Authorization: `Bearer ${token}` } })
@@ -692,7 +709,7 @@ function AdminDashboard({ user }) {
   }
 
   return <div className="admin-dashboard">
-    <section className="dashboard-intro"><div><span className="section-label">THỨ NĂM, 24 THÁNG 9, 2026</span><h2>Xin chào, {user.role === 'ADMIN' ? 'Quản trị viên' : (user.fullName || user.username)}</h2><p>Tóm tắt hoạt động chấm công và yêu cầu trong ngày hôm nay.</p></div><div className="world-map" aria-label="World map illustration"><span /><span /><span /><span /><span /><span /><span /><span /></div></section>
+    <section className="dashboard-intro"><div><span className="section-label">{currentDateStr}</span><h2>Xin chào, {user.role === 'ADMIN' ? 'Quản trị viên' : (user.fullName || user.username)}</h2><p>Tóm tắt hoạt động chấm công và yêu cầu trong ngày hôm nay.</p></div><div className="world-map" aria-label="World map illustration"><span /><span /><span /><span /><span /><span /><span /><span /></div></section>
     <span className="overview-label">OVERVIEW</span>
     <section className="metric-grid dark-metrics"><Metric icon={CalendarCheck} title="Tổng ngày công" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={Clock3} title="Tổng giờ" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={BarChart3} title="Đã chấm hôm nay" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={UsersRound} title="Vai trò ADMIN" value="ADMIN" note="Quyền quản trị hệ thống" chart="user" /></section>
     <section className="dashboard-panels admin-panels"><div className="content-panel activity-panel"><div className="panel-heading"><div><h3>Hoạt động chấm công</h3><p>Tổng quan trong 7 ngày gần nhất</p></div><span className="panel-filter">7 ngày⌄</span></div>{hasAttendanceData ? <AttendanceChart data={attendanceData} /> : <EmptyAttendanceState />}</div><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>Thông tin ca làm việc</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{todayShift?.current?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span><strong>{todayShift?.current ? `${todayShift.current.start.slice(0, 5)} — ${todayShift.current.end.slice(0, 5)}` : '07:30 — 12:00'}</strong></div><div className="status-line"><span>Ca khả dụng</span><strong>{todayShift?.shifts?.map((shift) => shift.name).join(' · ') || 'Ca sáng · Ca chiều'}</strong></div><div className="status-line"><span>Check-in</span><strong className="empty-value">{latestAttendance?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong className="empty-value">{latestAttendance?.check_out || '—:—'}</strong></div><div className="face-preview"><div className="face-radar"><Camera size={24} /><i /></div><span>{checkedIn ? 'Đã check-in, có thể check-out' : 'Camera cần xác thực khuôn mặt'}</span></div><button className="checkout-button face-action" disabled={!checkedIn && !(todayShift?.shifts?.length)} onClick={() => setFaceModal(true)}>{checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} /></button></div></div></section>
@@ -721,6 +738,17 @@ function StudentManagement() {
     }, 200);
     return () => clearTimeout(timer);
   }, [query]);
+
+  useEffect(() => {
+    if (confirm) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [confirm]);
   async function selectMember(member) {
     const response = await fetch(`${apiUrl}/admin/imported-attendance/users/${member.id}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await response.json();
@@ -791,13 +819,35 @@ function StudentManagement() {
     const refreshBody = await refresh.json();
     setMembers(refreshBody.data || []);
   }
-  return <div className="student-management-page"><ExcelImportCard /><section className="content-panel attendance-management">
+  return <div className="student-management-page manage-students-container"><ExcelImportCard /><section className="content-panel attendance-management manage-students-card">
     <div className="panel-heading"><div><h3>Quản lý & Tra cứu ngày công</h3><p>Tìm kiếm thành viên và điều chỉnh dữ liệu import</p></div>{selectedIds.length > 0 && <button className="danger-button" onClick={() => setConfirm({ bulk: true })}><Trash2 size={15} /> Xóa công đã chọn ({selectedIds.length})</button>}</div>
     <div className="attendance-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập họ tên nhân viên..." /></div>
     <div className="select-all-row"><label><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} /> Chọn tất cả sinh viên đang hiển thị</label><small>{selectedIds.length} đã chọn</small></div>
-    <div className="management-layout"><div className="member-results">{members.map((member) => <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} /><button type="button" className="member-result-content" onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button></div>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="user-info-grid"><div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div><div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div><div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div><div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div><div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div><div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div></div><div className="imported-record-list">{selected.records.map((record) => <div className="imported-record" key={`${record.source}-${record.id}`}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>    <small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>{record.source === 'Camera' && <span className="record-photo-actions"><button type="button" disabled={!record.check_in_photo_available || record.check_in_photo_expired} onClick={() => openMemberPhoto(record, 'check-in')}>Ảnh vào{record.check_in_photo_expired ? ' · Hết hạn' : ''}</button><button type="button" disabled={!record.check_out_photo_available || record.check_out_photo_expired} onClick={() => openMemberPhoto(record, 'check-out')}>Ảnh ra{record.check_out_photo_expired ? ' · Hết hạn' : ''}</button></span>}<button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!selected.records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div>}</div>
+    <div className="management-layout"><div className="member-results">{members.map((member) => <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} /><button type="button" className="member-result-content" onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button></div>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="user-info-grid"><div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div><div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div><div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div><div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div><div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div><div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div></div><div className="imported-record-list">{(selected.records || []).map((record) => <div className="imported-record" key={`${record.source}-${record.id}`}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>    <small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>{record.source === 'Camera' && <span className="record-photo-actions"><button type="button" disabled={!record.check_in_photo_available || record.check_in_photo_expired} onClick={() => openMemberPhoto(record, 'check-in')}>Ảnh vào{record.check_in_photo_expired ? ' · Hết hạn' : ''}</button><button type="button" disabled={!record.check_out_photo_available || record.check_out_photo_expired} onClick={() => openMemberPhoto(record, 'check-out')}>Ảnh ra{record.check_out_photo_expired ? ' · Hết hạn' : ''}</button></span>}<button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!(selected.records || []).length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div>}</div>
     {message && <div className="approval-note">{message}</div>}
-    {confirm && <div className="confirm-inline"><strong>Xác nhận xóa {confirm.bulk ? `toàn bộ công của ${selectedIds.length} sinh viên` : confirm.all ? 'toàn bộ công' : 'ca này'}?</strong><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" /><button className="danger-button" onClick={confirm.bulk ? executeBulkDelete : executeDelete}>Xác nhận xóa</button><button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy</button></div>}
+    {confirm && (
+      <div className="strict-delete-overlay">
+        <div className="strict-delete-modal">
+          <button className="modal-close" onClick={() => { setConfirm(null); setReason(''); }}>
+            <X size={18} />
+          </button>
+          <h3>Xác nhận xóa</h3>
+          <p>
+            Bạn có chắc chắn muốn xóa {confirm.bulk ? `toàn bộ công của ${selectedIds.length} sinh viên` : confirm.all ? 'toàn bộ công của sinh viên này' : 'ca làm việc này'}?
+          </p>
+          <textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Nhập lý do xóa (không bắt buộc)..."
+            rows="3"
+          ></textarea>
+          <div className="modal-actions">
+            <button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy bỏ</button>
+            <button className="danger-button" onClick={confirm.bulk ? executeBulkDelete : executeDelete}>Xác nhận xóa</button>
+          </div>
+        </div>
+      </div>
+    )}
     {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(photoPreview.url); setPhotoPreview(null); }}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(photoPreview.url); setPhotoPreview(null); }}><X size={18} /></button><span className="section-label">{photoPreview.label}</span><img src={photoPreview.url} alt={photoPreview.label} /></div></motion.div>}
   </section></div>;
 }
@@ -857,7 +907,7 @@ function EmptyAttendanceState() { return <div className="empty-attendance"><BarC
 function AttendanceChart({ data }) {
   const canvasRef = useRef(null);
   useEffect(() => {
-    if (!Array.isArray(data) || data.length === 0) return undefined;
+    if (!canvasRef.current || !Array.isArray(data) || data.length === 0) return undefined;
     const chart = new Chart(canvasRef.current, {
       type: 'bar',
       data: {
@@ -876,7 +926,7 @@ function AttendanceChart({ data }) {
       },
     });
     return () => chart.destroy();
-  }, []);
+  }, [data]);
   return <div className="chart-canvas-wrap"><canvas ref={canvasRef} aria-label="Biểu đồ chấm công 7 ngày" /></div>;
 }
 
