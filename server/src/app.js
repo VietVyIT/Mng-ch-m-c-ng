@@ -2,6 +2,8 @@ import cors from 'cors';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { env } from './config/env.js';
 import { errorMiddleware } from './middlewares/error.middleware.js';
 import healthRoutes from './routes/health.routes.js';
@@ -11,11 +13,14 @@ import attendanceRoutes from './routes/attendance.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 
 app.disable('x-powered-by');
 app.use(helmet());
-app.use(cors({ origin: env.clientUrl }));
+app.use(cors({ origin: env.clientUrl || true })); // Allow same-origin or all if not specified
 app.use(express.json({ limit: '10mb' }));
 app.use('/api/auth/login', rateLimit({
   windowMs: 5 * 60 * 1000,
@@ -31,6 +36,15 @@ app.use('/api/face', faceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/notifications', notificationRoutes);
+
+if (env.nodeEnv === 'production') {
+  const clientDistPath = path.resolve(__dirname, '../../client/dist');
+  app.use(express.static(clientDistPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
+
 app.use(errorMiddleware);
 
 export default app;

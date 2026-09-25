@@ -28,10 +28,10 @@ import {
 } from 'lucide-react';
 
 const configuredApiUrl = import.meta.env.VITE_API_URL;
-const apiUrl = configuredApiUrl || 'http://localhost:5000/api';
+const apiUrl = configuredApiUrl || (import.meta.env.PROD ? '/api' : 'http://localhost:5000/api');
 
 if (import.meta.env.PROD && !configuredApiUrl) {
-  console.error('Thiếu VITE_API_URL cho môi trường production.');
+  console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
 }
 
 function isSecureCameraContext() {
