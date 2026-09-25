@@ -104,30 +104,107 @@ Nếu thành viên chưa tồn tại, hệ thống sẽ tự tạo tài khoản 
 
 ## Deploy production trên Vercel/Netlify
 
-Frontend dùng Root Directory `client`, build command `npm run build`, output
-directory `dist`, và biến `VITE_API_URL=https://<api-domain>/api`. File
-[client/vercel.json](client/vercel.json) xử lý SPA rewrite cho Vercel; file
-[client/public/_redirects](client/public/_redirects) xử lý fallback route cho Netlify.
+### Quy trình đầy đủ với Vercel + Railway
 
-Backend Express cần chạy trên dịch vụ Node.js có MySQL. Production environment:
+Production cần hai dịch vụ độc lập:
+
+- **Vercel/Netlify:** frontend trong thư mục `client`.
+- **Railway:** Express API trong thư mục `server` và MySQL.
+
+Chỉ deploy frontend lên Vercel là chưa đủ để đăng nhập. Frontend phải có
+`VITE_API_URL` trỏ tới backend Railway đang chạy.
+
+#### Railway MySQL
+
+Tạo service MySQL và chạy SQL theo thứ tự:
+
+```text
+database/schema.sql
+database/migrations/003_workflows_shifts.sql
+database/migrations/004_punctuality_status.sql
+database/migrations/005_attendance_deletion_logs.sql
+database/migrations/006_notifications.sql
+database/migrations/007_user_profiles.sql
+database/migrations/008_imported_attendance.sql
+```
+
+Không bỏ qua migration `008_imported_attendance.sql`, vì file này tạo bảng
+import Excel và lịch sử nhiều ca trong cùng ngày.
+
+#### Railway backend
+
+Tạo service từ GitHub repository và đặt:
+
+```text
+Root directory: server
+Build command: npm install
+Start command: npm start
+```
+
+Trong Railway **Variables**, thêm:
 
 ```text
 NODE_ENV=production
 PORT=5000
 CLIENT_URL=https://<frontend-domain>
-DB_HOST=<mysql-host>
+DB_HOST=<railway-mysql-host>
 DB_PORT=3306
 DB_NAME=attendance_system
-DB_USER=<mysql-user>
-DB_PASSWORD=<mysql-password>
+DB_USER=<railway-mysql-user>
+DB_PASSWORD=<railway-mysql-password>
 JWT_SECRET=<random-secret-at-least-32-characters>
 FACE_MATCH_THRESHOLD=0.6
 ```
 
-Backend sẽ từ chối `CLIENT_URL` không dùng HTTPS hoặc `JWT_SECRET` mặc định/ngắn
-khi `NODE_ENV=production`. Webcam API chỉ hoạt động trên HTTPS (hoặc localhost),
-vì vậy frontend và API production đều phải dùng HTTPS. Chạy schema/migration
-trên database production trước khi sử dụng.
+`CLIENT_URL` là biến bắt buộc và phải là URL frontend thật, ví dụ
+`https://mng-ch-m-c-ng-client.vercel.app`, không có dấu `/` cuối. Nếu thiếu,
+backend dừng với lỗi `Thiếu biến môi trường bắt buộc: CLIENT_URL`.
+
+Tạo JWT secret an toàn:
+
+```powershell
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+```
+
+Sau khi backend chạy, vào **Settings > Networking > Generate Domain** và kiểm tra:
+
+```text
+https://<backend-domain>/api/health
+https://<backend-domain>/api/health/database
+```
+
+#### Vercel frontend
+
+```text
+Root directory: client
+Build command: npm run build
+Output directory: dist
+```
+
+Thêm biến:
+
+```text
+VITE_API_URL=https://<backend-domain>/api
+```
+
+Sau khi đổi `VITE_API_URL`, phải **Redeploy** vì biến `VITE_*` được nhúng lúc
+build. [client/vercel.json](client/vercel.json) đã cấu hình SPA rewrite. Với
+Netlify, dùng Base directory `client`, Publish directory `dist`; file
+[client/public/_redirects](client/public/_redirects) đã có fallback route.
+
+#### Cập nhật production
+
+```powershell
+npm run build
+git add .
+git commit -m "Describe the change"
+git push origin main
+```
+
+Vercel và Railway sẽ tự deploy commit mới nếu đã bật GitHub integration. Trước
+khi chạy migration mới, hãy backup database và tạo migration mới thay vì sửa
+migration cũ. Không commit `server/.env`, `client/.env` hoặc
+`server/seed/members.json`.
 
 Các mục Chấm công, Lịch sử và Hồ sơ yêu cầu đăng nhập. JWT được gửi qua header
 `Authorization: Bearer <token>` và backend kiểm tra role trước khi cho phép truy cập.
