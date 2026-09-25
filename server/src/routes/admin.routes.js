@@ -348,40 +348,75 @@ router.put('/shifts/:date', async (request, response, next) => {
   }
 });
 
-router.get('/approvals', async (_request, response, next) => {
+async function fetchAttendanceRequests(filter = 'all') {
+  let whereClause = "WHERE e.status = 'PENDING'";
+  if (filter === 'late') {
+    whereClause += " AND (a.punctuality_status = 'LATE' OR a.is_late = TRUE OR e.punctuality_status = 'LATE' OR e.is_late = TRUE)";
+  } else if (filter === 'ontime') {
+    whereClause += " AND (a.punctuality_status = 'ON_TIME' OR a.punctuality_status IS NULL) AND (a.is_late = FALSE OR a.is_late IS NULL)";
+  }
+
+  const [rows] = await pool.execute(
+    `SELECT e.id, e.id AS event_id, e.attendance_id, e.user_id, e.event_type, e.captured_at,
+            e.captured_at AS check_in_time, e.status, e.photo_expired, (e.image IS NOT NULL) AS has_photo,
+            a.attendance_date, a.shift_code, a.shift_name, a.shift_start, a.shift_end,
+            a.punctuality_status, a.is_late, a.late_minutes, a.check_in, a.check_out,
+            u.full_name, u.username, u.student_code
+     FROM attendance_events e
+     JOIN attendance a ON a.id = e.attendance_id
+     JOIN users u ON u.id = e.user_id
+     ${whereClause}
+     ORDER BY e.captured_at DESC`,
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    is_late: Boolean(row.is_late || row.punctuality_status === 'LATE'),
+    punctuality_status: row.punctuality_status || (row.is_late ? 'LATE' : 'ON_TIME'),
+  }));
+}
+
+router.get('/attendance-requests', async (request, response, next) => {
   try {
-    const [rows] = await pool.execute(
-      `SELECT e.id AS event_id, e.attendance_id, e.event_type, e.captured_at, e.status,
-              e.photo_expired, a.attendance_date, a.shift_name, a.shift_start, a.shift_end,
-              u.full_name, u.username
-       FROM attendance_events e
-       JOIN attendance a ON a.id = e.attendance_id
-       JOIN users u ON u.id = e.user_id
-       WHERE e.status = 'PENDING'
-       ORDER BY e.captured_at DESC`,
-    );
-    return response.json({ success: true, data: rows });
+    const filter = String(request.query.filter || 'all').toLowerCase();
+    const data = await fetchAttendanceRequests(filter);
+    return response.json({ success: true, count: data.length, data });
   } catch (error) {
     return next(error);
   }
 });
 
-router.get('/approvals/:eventId/image', async (request, response, next) => {
+router.get('/approvals', async (request, response, next) => {
+  try {
+    const filter = String(request.query.filter || 'all').toLowerCase();
+    const data = await fetchAttendanceRequests(filter);
+    return response.json({ success: true, count: data.length, data });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+async function serveApprovalImage(request, response, next) {
   try {
     await pool.execute(
       `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
        WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
     );
+    const eventId = request.params.id || request.params.eventId;
     const [rows] = await pool.execute(
       'SELECT image, image_mime FROM attendance_events WHERE id = ? LIMIT 1',
-      [request.params.eventId],
+      [eventId],
     );
     if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn.' });
     return response.type(rows[0].image_mime || 'image/jpeg').send(rows[0].image);
   } catch (error) {
     return next(error);
   }
-});
+}
+
+router.get('/approvals/:eventId/image', serveApprovalImage);
+router.get('/attendance-requests/:id/image', serveApprovalImage);
+
 
 router.get('/attendance', async (_request, response, next) => {
   try {
@@ -488,7 +523,8 @@ router.delete('/attendance/:attendanceId', async (request, response, next) => {
   }
 });
 
-router.patch('/approvals/:eventId', async (request, response, next) => {
+async function reviewApprovalHandler(request, response, next) {
+  const eventId = request.params.id || request.params.eventId;
   const status = String(request.body.status || '').toUpperCase();
   const reason = typeof request.body.reason === 'string' ? request.body.reason.trim().slice(0, 500) : null;
   if (!['APPROVED', 'REJECTED'].includes(status)) {
@@ -501,7 +537,7 @@ router.patch('/approvals/:eventId', async (request, response, next) => {
       `SELECT e.attendance_id, e.user_id, e.event_type, a.attendance_date, a.shift_name
        FROM attendance_events e JOIN attendance a ON a.id = e.attendance_id
        WHERE e.id = ? AND e.status = ? FOR UPDATE`,
-      [request.params.eventId, 'PENDING'],
+      [eventId, 'PENDING'],
     );
     if (!events[0]) {
       await connection.rollback();
@@ -509,7 +545,7 @@ router.patch('/approvals/:eventId', async (request, response, next) => {
     }
     await connection.execute(
       'UPDATE attendance_events SET status = ?, reviewed_by = ?, reviewed_at = NOW() WHERE id = ?',
-      [status, request.user.userId, request.params.eventId],
+      [status, request.user.userId, eventId],
     );
     const dateInfo = `${events[0].shift_name || 'Ca làm việc'} - Ngày ${new Date(events[0].attendance_date).toLocaleDateString('vi-VN')}`;
     const eventLabel = events[0].event_type === 'CHECK_IN' ? 'check-in' : 'check-out';
@@ -534,13 +570,99 @@ router.patch('/approvals/:eventId', async (request, response, next) => {
       await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [events[0].user_id]);
     }
     await connection.commit();
-    return response.json({ success: true, status });
+    return response.json({
+      success: true,
+      status,
+      message: status === 'APPROVED' ? 'Đã phê duyệt yêu cầu thành công.' : 'Đã từ chối yêu cầu.',
+    });
   } catch (error) {
     await connection.rollback();
     return next(error);
   } finally {
     connection.release();
   }
-});
+}
+
+async function approveAllHandler(request, response, next) {
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const requestedIds = Array.isArray(request.body?.eventIds)
+      ? request.body.eventIds.map(Number).filter(Boolean)
+      : null;
+
+    let query = `
+      SELECT e.id, e.attendance_id, e.user_id, e.event_type, a.attendance_date, a.shift_name
+      FROM attendance_events e
+      JOIN attendance a ON a.id = e.attendance_id
+      WHERE e.status = 'PENDING'
+    `;
+    const params = [];
+    if (requestedIds && requestedIds.length > 0) {
+      query += ` AND e.id IN (${requestedIds.map(() => '?').join(',')})`;
+      params.push(...requestedIds);
+    }
+    query += ' FOR UPDATE';
+
+    const [events] = await connection.execute(query, params);
+    if (!events.length) {
+      await connection.rollback();
+      return response.json({ success: true, approvedCount: 0, message: 'Không có yêu cầu nào chờ duyệt.' });
+    }
+
+    const eventIds = events.map((e) => e.id);
+    const eventIdsPlaceholders = eventIds.map(() => '?').join(',');
+    await connection.execute(
+      `UPDATE attendance_events SET status = 'APPROVED', reviewed_by = ?, reviewed_at = NOW() WHERE id IN (${eventIdsPlaceholders})`,
+      [request.user.userId, ...eventIds],
+    );
+
+    const attendanceIds = [...new Set(events.map((e) => e.attendance_id))];
+    const attendancePlaceholders = attendanceIds.map(() => '?').join(',');
+    await connection.execute(
+      `UPDATE attendance SET status = 'APPROVED' WHERE id IN (${attendancePlaceholders})`,
+      attendanceIds,
+    );
+
+    const checkInUserIds = events.filter((e) => e.event_type === 'CHECK_IN').map((e) => e.user_id);
+    for (const userId of checkInUserIds) {
+      await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [userId]);
+    }
+
+    for (const evt of events) {
+      const dateInfo = `${evt.shift_name || 'Ca làm việc'} - Ngày ${new Date(evt.attendance_date).toLocaleDateString('vi-VN')}`;
+      const eventLabel = evt.event_type === 'CHECK_IN' ? 'check-in' : 'check-out';
+      await createNotification(connection, {
+        recipientId: evt.user_id,
+        type: 'ATTENDANCE_APPROVED',
+        title: 'Chấm công đã được phê duyệt',
+        message: `Yêu cầu ${eventLabel} ${dateInfo} của bạn đã được phê duyệt hàng loạt.`,
+        dateInfo,
+        reason: null,
+      });
+    }
+
+    await connection.commit();
+    return response.json({
+      success: true,
+      approvedCount: events.length,
+      message: `Đã phê duyệt thành công ${events.length} yêu cầu chấm công.`,
+    });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+}
+
+router.patch('/approvals/:eventId', reviewApprovalHandler);
+router.patch('/attendance-requests/:id', reviewApprovalHandler);
+
+router.post('/approvals/approve-all', approveAllHandler);
+router.patch('/approvals/approve-all', approveAllHandler);
+router.post('/attendance-requests/approve-all', approveAllHandler);
+router.patch('/attendance-requests/approve-all', approveAllHandler);
 
 export default router;
+

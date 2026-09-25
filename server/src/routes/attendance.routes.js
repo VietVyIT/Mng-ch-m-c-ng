@@ -3,12 +3,11 @@ import { pool } from '../config/database.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { cosineSimilarity, validateEmbedding } from '../utils/face.js';
 import { env } from '../config/env.js';
-import { DEFAULT_SHIFTS, getCurrentShift } from '../config/shifts.js';
+import { DEFAULT_SHIFTS, getCurrentShift, checkLateStatus } from '../config/shifts.js';
 
 const router = Router();
 const MAX_IMAGE_BYTES = 30 * 1024;
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
-const LATE_GRACE_MINUTES = 5;
 
 function parseImage(imageData) {
   if (typeof imageData !== 'string') return null;
@@ -56,13 +55,6 @@ async function getTodayShift() {
   return { eveningEnabled: rows[0]?.evening_enabled !== 0, shifts: DEFAULT_SHIFTS.filter((shift) => shift.code !== 'EVENING' || rows[0]?.evening_enabled !== 0) };
 }
 
-function getPunctualityStatus(shift, now = new Date()) {
-  const [hour, minute] = shift.start.split(':').map(Number);
-  const startMinutes = hour * 60 + minute;
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  return currentMinutes > startMinutes + LATE_GRACE_MINUTES ? 'LATE' : 'ON_TIME';
-}
-
 router.get('/shifts/today', authenticate, async (_request, response, next) => {
   try {
     const data = await getTodayShift();
@@ -77,7 +69,8 @@ router.get('/today', authenticate, async (request, response, next) => {
     await purgeExpiredPhotos();
     const [rows] = await pool.execute(
       `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
-              check_in, check_out, total_hours, status, punctuality_status, face_verified, photo_expired
+              check_in, check_out, total_hours, status, punctuality_status, is_late, late_minutes,
+              face_verified, photo_expired
        FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE LIMIT 1`,
       [request.user.userId],
     );
@@ -92,7 +85,8 @@ router.get('/my', authenticate, async (request, response, next) => {
     await purgeExpiredPhotos();
     const [rows] = await pool.execute(
       `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
-              check_in, check_out, total_hours, status, punctuality_status, face_verified, photo_expired,
+              check_in, check_out, total_hours, status, punctuality_status, is_late, late_minutes,
+              face_verified, photo_expired,
               (SELECT total_work_days FROM users WHERE id = attendance.user_id) AS total_work_days,
               (SELECT captured_at FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_IN' ORDER BY e.captured_at DESC LIMIT 1) AS check_in_captured_at,
               (SELECT captured_at FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_OUT' ORDER BY e.captured_at DESC LIMIT 1) AS check_out_captured_at,
@@ -105,7 +99,7 @@ router.get('/my', authenticate, async (request, response, next) => {
     );
     const [importedRows] = await pool.execute(
       `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
-              check_in, check_out, total_hours, status, NULL AS punctuality_status,
+              check_in, check_out, total_hours, status, NULL AS punctuality_status, FALSE AS is_late, 0 AS late_minutes,
               FALSE AS face_verified, TRUE AS imported_from_excel,
               (SELECT total_work_days FROM users WHERE id = imported_attendance_records.user_id) AS total_work_days,
               check_in AS check_in_captured_at, check_out AS check_out_captured_at,
@@ -169,13 +163,18 @@ async function createAttendanceEvent(request, eventType, response) {
       await connection.rollback();
       return response.status(409).json({ success: false, message: attendance?.check_out ? 'Bạn đã check-out hôm nay.' : 'Bạn chưa check-in hôm nay.', errorCode: 'CHECK_IN_REQUIRED' });
     }
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
+
     if (!attendance) {
-      const punctualityStatus = getPunctualityStatus(shift);
+      checkInLateInfo = checkLateStatus(shift, now);
       const [insert] = await connection.execute(
         `INSERT INTO attendance
-         (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, face_verified)
-         VALUES (?, CURRENT_DATE, ?, ?, ?, ?, NOW(), 'PENDING', ?, TRUE)`,
-        [request.user.userId, shift.code, shift.name, shift.start, shift.end, punctualityStatus],
+         (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, is_late, late_minutes, face_verified)
+         VALUES (?, CURRENT_DATE, ?, ?, ?, ?, NOW(), 'PENDING', ?, ?, ?, TRUE)`,
+        [request.user.userId, shift.code, shift.name, shift.start, shift.end, checkInLateInfo.punctualityStatus, checkInLateInfo.isLate, checkInLateInfo.lateMinutes],
       );
       attendance = { id: insert.insertId, check_in: true };
     } else if (eventType === 'CHECK_OUT') {
@@ -184,17 +183,39 @@ async function createAttendanceEvent(request, eventType, response) {
         [attendance.id],
       );
     }
+
     await connection.execute(
       `INSERT INTO attendance_events
-       (attendance_id, user_id, event_type, image, image_mime, face_verified, status)
-       VALUES (?, ?, ?, ?, ?, TRUE, 'PENDING')`,
-      [attendance.id, request.user.userId, eventType, image.buffer, image.mime],
+       (attendance_id, user_id, event_type, image, image_mime, face_verified, is_late, punctuality_status, status)
+       VALUES (?, ?, ?, ?, ?, TRUE, ?, ?, 'PENDING')`,
+      [attendance.id, request.user.userId, eventType, image.buffer, image.mime, checkInLateInfo.isLate, checkInLateInfo.punctualityStatus],
     );
     await connection.commit();
+
+    let responseMessage;
+    if (eventType === 'CHECK_IN') {
+      responseMessage = checkInLateInfo.isLate
+        ? `Bạn đã check-in trễ lúc ${timeStr}. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.`
+        : `Check-in thành công lúc ${timeStr}, đang chờ quản trị viên duyệt.`;
+    } else {
+      responseMessage = `Check-out thành công lúc ${timeStr}, đang chờ quản trị viên duyệt.`;
+    }
+
     return response.status(eventType === 'CHECK_IN' ? 201 : 200).json({
       success: true,
       status: 'PENDING',
-      message: `${eventType === 'CHECK_IN' ? 'Check-in' : 'Check-out'} thành công, đang chờ quản trị viên duyệt.`,
+      is_late: checkInLateInfo.isLate,
+      punctuality_status: checkInLateInfo.punctualityStatus,
+      late_minutes: checkInLateInfo.lateMinutes,
+      check_in_time: eventType === 'CHECK_IN' ? now.toISOString() : undefined,
+      check_out_time: eventType === 'CHECK_OUT' ? now.toISOString() : undefined,
+      message: responseMessage,
+      data: {
+        attendance_id: attendance.id,
+        status: 'PENDING',
+        is_late: checkInLateInfo.isLate,
+        punctuality_status: checkInLateInfo.punctualityStatus,
+      },
     });
   } catch (error) {
     await connection.rollback();
