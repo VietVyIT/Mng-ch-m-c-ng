@@ -1,58 +1,33 @@
-# ============================================================
-# ATTENDLY – Hệ Thống Quản Lý Chấm Công
-# Multi-stage Dockerfile (node:18-alpine)
-# ============================================================
-
-# ── Stage 1: Build React/Vite client ────────────────────────
+# STAGE 1: Client Builder
 FROM node:18-alpine AS client-builder
 
-WORKDIR /build
+WORKDIR /app/client
 
-# Copy workspace root + client package manifests
-COPY package.json package-lock.json ./
-COPY client/package.json client/
+# Copy cấu hình client và cài đặt dependencies
+COPY client/package*.json ./
+RUN npm install
 
-# Install ALL deps (including devDependencies for vite build)
-RUN npm ci --workspace client
+# Copy toàn bộ mã nguồn client và build ra thư mục tĩnh (dist)
+COPY client/ ./
+RUN npm run build
 
-# Copy client source & build
-COPY client/ client/
-RUN npm run build --workspace client
+# STAGE 2: Production Server
+FROM node:18-alpine AS production-server
 
+WORKDIR /app/server
 
-# ── Stage 2: Production server ──────────────────────────────
-FROM node:18-alpine AS production
+# Copy cấu hình server và cài đặt dependencies (chỉ production)
+COPY server/package*.json ./
+RUN npm install --omit=dev
 
-LABEL maintainer="ATTENDLY Team"
-LABEL description="Hệ Thống Tra Cứu & Quản Lý Ngày Công Sinh Viên"
+# Copy toàn bộ mã nguồn server
+COPY server/ ./
 
-# Tini for proper PID 1 signal handling
-RUN apk add --no-cache tini
+# Copy thư mục tĩnh đã build từ Stage 1 sang cấu trúc mong đợi của app.js
+COPY --from=client-builder /app/client/dist /app/client/dist
 
-WORKDIR /app
+# Expose port (Nginx sẽ proxy vào port này)
+EXPOSE 3000
 
-# Copy workspace root + server package manifests
-COPY package.json package-lock.json ./
-COPY server/package.json server/
-
-# Install production-only dependencies
-RUN npm ci --omit=dev --workspace server && npm cache clean --force
-
-# Copy server source
-COPY server/ server/
-
-# Copy database schemas & migrations (for reference / init scripts)
-COPY database/ database/
-
-# Copy built client from stage 1
-COPY --from=client-builder /build/client/dist client/dist
-
-# App listens on port 5000
-EXPOSE 5000
-
-# Use tini as entrypoint for signal handling
-ENTRYPOINT ["/sbin/tini", "--"]
-
-# Start the Express server in production mode
-ENV NODE_ENV=production
-CMD ["node", "server/src/server.js"]
+# Khởi chạy server
+CMD ["node", "src/server.js"]
