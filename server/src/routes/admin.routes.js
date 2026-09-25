@@ -292,6 +292,115 @@ router.delete('/imported-attendance/bulk-users', async (request, response, next)
   }
 });
 
+// DELETE USER COMPLETELY FROM SYSTEM
+router.delete('/users/:userId', async (request, response, next) => {
+  const targetId = Number(request.params.userId);
+  if (!targetId || targetId <= 0) {
+    return response.status(400).json({ success: false, message: 'ID người dùng không hợp lệ.' });
+  }
+
+  if (targetId === request.user.userId) {
+    return response.status(400).json({ success: false, message: 'Không thể tự xóa tài khoản Quản trị viên của bạn.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const [users] = await connection.execute('SELECT id, full_name, username, role FROM users WHERE id = ? FOR UPDATE', [targetId]);
+    const user = users[0];
+    if (!user) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy người dùng cần xóa.' });
+    }
+
+    if (user.role === 'ADMIN') {
+      const [adminCount] = await connection.execute('SELECT COUNT(*) AS count FROM users WHERE role = \'ADMIN\'');
+      if (adminCount[0]?.count <= 1) {
+        await connection.rollback();
+        return response.status(400).json({ success: false, message: 'Không thể xóa Quản trị viên duy nhất của hệ thống.' });
+      }
+    }
+
+    // Clean up related records in all tables
+    await connection.execute('DELETE FROM notifications WHERE recipient_id = ?', [targetId]);
+    await connection.execute('DELETE FROM attendance_events WHERE user_id = ?', [targetId]);
+    await connection.execute('UPDATE attendance_events SET reviewed_by = NULL WHERE reviewed_by = ?', [targetId]);
+    await connection.execute('UPDATE attendance_deletion_logs SET deleted_by = NULL WHERE deleted_by = ?', [targetId]);
+    await connection.execute('DELETE FROM imported_attendance_records WHERE user_id = ?', [targetId]);
+    await connection.execute('DELETE FROM attendance WHERE user_id = ?', [targetId]);
+    await connection.execute('UPDATE shift_day_settings SET updated_by = NULL WHERE updated_by = ?', [targetId]);
+
+    // Delete user from users table
+    await connection.execute('DELETE FROM users WHERE id = ?', [targetId]);
+
+    await connection.commit();
+    return response.json({
+      success: true,
+      message: `Đã xóa thành viên "${user.full_name}" (${user.username}) vĩnh viễn khỏi hệ thống.`,
+    });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+});
+
+// BULK DELETE USERS COMPLETELY FROM SYSTEM
+router.delete('/bulk-delete-users', async (request, response, next) => {
+  const userIds = Array.isArray(request.body?.userIds)
+    ? [...new Set(request.body.userIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id > 0))]
+    : [];
+
+  if (!userIds.length || userIds.length > 500) {
+    return response.status(400).json({ success: false, message: 'Vui lòng chọn từ 1 đến 500 người dùng để xóa.' });
+  }
+
+  const safeUserIds = userIds.filter((id) => id !== request.user.userId);
+  if (!safeUserIds.length) {
+    return response.status(400).json({ success: false, message: 'Không thể tự xóa tài khoản Quản trị viên.' });
+  }
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+
+    const placeholders = safeUserIds.map(() => '?').join(',');
+    const [users] = await connection.execute(
+      `SELECT id, full_name, username, role FROM users WHERE id IN (${placeholders}) FOR UPDATE`,
+      safeUserIds,
+    );
+
+    if (!users.length) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy người dùng hợp lệ để xóa.' });
+    }
+
+    await connection.execute(`DELETE FROM notifications WHERE recipient_id IN (${placeholders})`, safeUserIds);
+    await connection.execute(`DELETE FROM attendance_events WHERE user_id IN (${placeholders})`, safeUserIds);
+    await connection.execute(`UPDATE attendance_events SET reviewed_by = NULL WHERE reviewed_by IN (${placeholders})`, safeUserIds);
+    await connection.execute(`UPDATE attendance_deletion_logs SET deleted_by = NULL WHERE deleted_by IN (${placeholders})`, safeUserIds);
+    await connection.execute(`DELETE FROM imported_attendance_records WHERE user_id IN (${placeholders})`, safeUserIds);
+    await connection.execute(`DELETE FROM attendance WHERE user_id IN (${placeholders})`, safeUserIds);
+    await connection.execute(`UPDATE shift_day_settings SET updated_by = NULL WHERE updated_by IN (${placeholders})`, safeUserIds);
+
+    await connection.execute(`DELETE FROM users WHERE id IN (${placeholders})`, safeUserIds);
+
+    await connection.commit();
+    return response.json({
+      success: true,
+      deletedCount: users.length,
+      message: `Đã xóa vĩnh viễn ${users.length} thành viên khỏi hệ thống.`,
+    });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
+  }
+});
+
 router.post('/announcements', async (request, response, next) => {
   const title = typeof request.body.title === 'string' ? request.body.title.trim().slice(0, 255) : '';
   const message = typeof request.body.message === 'string' ? request.body.message.trim().slice(0, 2000) : '';

@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
   BarChart3,
   Bell,
@@ -18,13 +19,19 @@ import {
   Eye,
   EyeOff,
   FileClock,
+  KeyRound,
   LayoutDashboard,
   LockKeyhole,
   LogOut,
+  Mail,
   Menu,
+  RefreshCw,
   ShieldCheck,
   Search,
+  Smartphone,
   Trash2,
+  UserMinus,
+  UserPlus,
   UserRound,
   UsersRound,
   X,
@@ -68,10 +75,45 @@ function cleanName(value) {
 }
 
 function parseExcelDate(value) {
-  const match = String(value || '').trim().match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
+  const str = String(value || '').trim();
+  const match = str.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
   if (!match) return null;
   const year = match[3] || String(new Date().getFullYear());
-  return `${year}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+  const num1 = parseInt(match[1], 10);
+  const num2 = parseInt(match[2], 10);
+
+  let day;
+  let month;
+  if (num1 > 12) {
+    // num1 là ngày (vd: 14/09, 17/08, 24/09)
+    day = num1;
+    month = num2;
+  } else if (num2 > 12) {
+    // num2 là ngày (vd: 09/14, 09/17, 09/24)
+    day = num2;
+    month = num1;
+  } else {
+    // Cả 2 đều <= 12 (vd: 07/09, 10/09, 11/09, 12/09 hoặc 09/10, 09/11, 09/12)
+    // Ưu tiên tháng 9 (đợt công tác tháng 9)
+    if (num2 === 9) {
+      day = num1;
+      month = 9;
+    } else if (num1 === 9) {
+      day = num2;
+      month = 9;
+    } else {
+      // Mặc định định dạng Việt Nam DD/MM
+      day = num1;
+      month = num2;
+    }
+  }
+
+  // Toàn bộ dữ liệu đợt này là tháng 9 (chuẩn hóa các cột ghi nhầm tháng 8 về tháng 9)
+  if (month === 8) {
+    month = 9;
+  }
+
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function parseAttendanceWorkbook(buffer) {
@@ -177,26 +219,30 @@ function App() {
           setShowLogin(false);
           setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : loggedInUser.mustChangePassword ? 'Hồ sơ' : 'Chấm công');
         }}
-        onForgot={() => setShowForgot(true)}
       />
     );
   }
 
   return (
-    <>
-      <DashboardShell user={user} page={page} onNavigate={setPage} onLogout={logout} onUserUpdated={(updatedUser) => { setUser(updatedUser); localStorage.setItem('attendance_user', JSON.stringify(updatedUser)); }} />
-      <AnimatePresence>
-        {showForgot && <ForgotPassword onClose={() => setShowForgot(false)} />}
-      </AnimatePresence>
-    </>
+    <DashboardShell
+      user={user}
+      page={page}
+      onNavigate={setPage}
+      onLogout={logout}
+      onUserUpdated={(updatedUser) => {
+        setUser(updatedUser);
+        localStorage.setItem('attendance_user', JSON.stringify(updatedUser));
+      }}
+    />
   );
 }
 
-function LoginScreen({ onLogin, onForgot }) {
+function LoginScreen({ onLogin }) {
   const [form, setForm] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [modalType, setModalType] = useState(null);
 
   async function submit(event) {
     event.preventDefault();
@@ -226,14 +272,65 @@ function LoginScreen({ onLogin, onForgot }) {
         <div className="login-form-panel">
           <div className="form-heading"><h2>ĐĂNG NHẬP HỆ THỐNG</h2></div>
           <form onSubmit={submit}>
-            <input className="login-input" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} placeholder="Tài khoản đăng nhập" aria-label="Tài khoản đăng nhập" required />
-            <div className="password-field"><input className="login-input" type={showPassword ? 'text' : 'password'} value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} placeholder="Mật khẩu" aria-label="Mật khẩu" required /><button type="button" aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'} onClick={() => setShowPassword(!showPassword)}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></div>
+            <input
+              className="login-input"
+              value={form.username}
+              onChange={(event) => setForm({ ...form, username: event.target.value })}
+              placeholder="Tên đăng nhập"
+              aria-label="Tên đăng nhập"
+              required
+            />
+            <div className="password-field">
+              <input
+                className="login-input"
+                type={showPassword ? 'text' : 'password'}
+                value={form.password}
+                onChange={(event) => setForm({ ...form, password: event.target.value })}
+                placeholder="Mật khẩu"
+                aria-label="Mật khẩu"
+                required
+              />
+              <button
+                type="button"
+                aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                onClick={() => setShowPassword(!showPassword)}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
             {error && <div className="form-error">{error}</div>}
-            <button className="primary-button" type="submit" disabled={loading}>{loading ? 'ĐANG XỬ LÝ...' : 'ĐĂNG NHẬP'}</button>
+            <button className="primary-button" type="submit" disabled={loading}>
+              {loading ? 'ĐANG XỬ LÝ...' : 'ĐĂNG NHẬP'}
+            </button>
           </form>
-          <button className="forgot-link" type="button" onClick={onForgot}>Quên mật khẩu?</button>
+
+          <div className="auth-links flex justify-between items-center mt-4 text-sm">
+            <button type="button" onClick={() => setModalType('FORGOT_PASSWORD')} className="text-red-600 hover:underline">
+              Quên mật khẩu?
+            </button>
+            <button type="button" onClick={() => setModalType('REGISTER')} className="text-teal-700 hover:underline font-medium">
+              Tạo tài khoản mới
+            </button>
+          </div>
         </div>
       </motion.section>
+
+      <AnimatePresence>
+        {modalType === 'REGISTER' && (
+          <RegisterModal
+            onClose={() => setModalType(null)}
+            onSuccess={(registeredUser) => {
+              setModalType(null);
+              onLogin(registeredUser);
+            }}
+          />
+        )}
+        {modalType === 'FORGOT_PASSWORD' && (
+          <ForgotPasswordModal
+            onClose={() => setModalType(null)}
+          />
+        )}
+      </AnimatePresence>
     </main>
   );
 }
@@ -994,6 +1091,7 @@ function StudentManagement() {
   const [message, setMessage] = useState('');
   const [photoPreview, setPhotoPreview] = useState(null);
   const token = localStorage.getItem('attendance_token');
+
   useEffect(() => {
     const timer = setTimeout(() => {
       fetch(`${apiUrl}/admin/imported-attendance/users?search=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` } })
@@ -1014,11 +1112,13 @@ function StudentManagement() {
       document.body.style.overflow = '';
     };
   }, [confirm]);
+
   async function selectMember(member) {
     const response = await fetch(`${apiUrl}/admin/imported-attendance/users/${member.id}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await response.json();
     if (response.ok && body.success) setSelected(body.data);
   }
+
   async function openMemberPhoto(record, type) {
     const prefix = type === 'check-in' ? 'check_in' : 'check_out';
     const availableKey = `${prefix}_photo_available`;
@@ -1032,6 +1132,7 @@ function StudentManagement() {
     const label = (selected?.user.full_name || '') + ' · ' + (type === 'check-in' ? 'Check-in' : 'Check-out');
     setPhotoPreview({ url: URL.createObjectURL(await response.blob()), label });
   }
+
   async function executeDelete() {
     const target = confirm;
     if (!target) return;
@@ -1055,6 +1156,60 @@ function StudentManagement() {
     setReason('');
     await selectMember(selected.user);
   }
+
+  async function executeDeleteUser(targetUser) {
+    if (!targetUser?.id) return;
+    try {
+      const response = await fetch(`${apiUrl}/admin/users/${targetUser.id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) {
+        setMessage(body.message || 'Không thể xóa thành viên.');
+        return;
+      }
+      setMessage(body.message);
+      setConfirm(null);
+      setReason('');
+      if (selected?.user?.id === targetUser.id) {
+        setSelected(null);
+      }
+      setSelectedIds((current) => current.filter((id) => id !== targetUser.id));
+      const refresh = await fetch(`${apiUrl}/admin/imported-attendance/users?search=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` } });
+      const refreshBody = await refresh.json();
+      setMembers(refreshBody.data || []);
+    } catch (err) {
+      setMessage(err.message || 'Lỗi khi xóa thành viên.');
+    }
+  }
+
+  async function executeBulkDeleteUsers() {
+    if (!selectedIds.length) return;
+    try {
+      const response = await fetch(`${apiUrl}/admin/bulk-delete-users`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ userIds: selectedIds }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success) {
+        setMessage(body.message || 'Không thể xóa các thành viên đã chọn.');
+        return;
+      }
+      setMessage(body.message);
+      setSelectedIds([]);
+      setConfirm(null);
+      setReason('');
+      setSelected(null);
+      const refresh = await fetch(`${apiUrl}/admin/imported-attendance/users?search=${encodeURIComponent(query)}`, { headers: { Authorization: `Bearer ${token}` } });
+      const refreshBody = await refresh.json();
+      setMembers(refreshBody.data || []);
+    } catch (err) {
+      setMessage(err.message || 'Lỗi khi xóa thành viên.');
+    }
+  }
+
   const allVisibleSelected = members.length > 0 && members.every((member) => selectedIds.includes(member.id));
   function toggleMember(memberId) {
     setSelectedIds((current) => current.includes(memberId)
@@ -1084,32 +1239,188 @@ function StudentManagement() {
     const refreshBody = await refresh.json();
     setMembers(refreshBody.data || []);
   }
+
   return <div className="student-management-page manage-students-container"><ExcelImportCard /><section className="content-panel attendance-management manage-students-card">
-    <div className="panel-heading"><div><h3>Quản lý & Tra cứu ngày công</h3><p>Tìm kiếm thành viên và điều chỉnh dữ liệu import</p></div>{selectedIds.length > 0 && <button className="danger-button" onClick={() => setConfirm({ bulk: true })}><Trash2 size={15} /> Xóa công đã chọn ({selectedIds.length})</button>}</div>
+    <div className="panel-heading">
+      <div>
+        <h3>Quản lý & Tra cứu ngày công</h3>
+        <p>Tìm kiếm thành viên, xóa tài khoản hoặc điều chỉnh dữ liệu import</p>
+      </div>
+      {selectedIds.length > 0 && (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="danger-button" onClick={() => setConfirm({ bulk: true })}>
+            <Trash2 size={15} /> Xóa công ({selectedIds.length})
+          </button>
+          <button className="danger-button" style={{ backgroundColor: '#dc2626', color: '#ffffff' }} onClick={() => setConfirm({ bulkUser: true })}>
+            <UserMinus size={15} /> Xóa người ({selectedIds.length})
+          </button>
+        </div>
+      )}
+    </div>
     <div className="attendance-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập họ tên nhân viên..." /></div>
     <div className="select-all-row"><label><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} /> Chọn tất cả sinh viên đang hiển thị</label><small>{selectedIds.length} đã chọn</small></div>
-    <div className="management-layout"><div className="member-results">{members.map((member) => <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} /><button type="button" className="member-result-content" onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button></div>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="user-info-grid"><div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div><div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div><div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div><div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div><div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div><div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div></div><div className="imported-record-list">{(selected.records || []).map((record) => <div className="imported-record" key={`${record.source}-${record.id}`}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>    <small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>{record.source === 'Camera' && <span className="record-photo-actions"><button type="button" disabled={!record.check_in_photo_available || record.check_in_photo_expired} onClick={() => openMemberPhoto(record, 'check-in')}>Ảnh vào{record.check_in_photo_expired ? ' · Hết hạn' : ''}</button><button type="button" disabled={!record.check_out_photo_available || record.check_out_photo_expired} onClick={() => openMemberPhoto(record, 'check-out')}>Ảnh ra{record.check_out_photo_expired ? ' · Hết hạn' : ''}</button></span>}<button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!(selected.records || []).length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div>}</div>
-    {message && <div className="approval-note">{message}</div>}
+    <div className="management-layout">
+      <div className="member-results">
+        {members.map((member) => (
+          <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}>
+            <input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} />
+            <button type="button" className="member-result-content" onClick={() => selectMember(member)}>
+              <strong>{member.full_name}</strong>
+              <small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small>
+            </button>
+            <button
+              type="button"
+              className="icon-danger delete-member-quick"
+              title={`Xóa ${member.full_name} khỏi hệ thống`}
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirm({ deleteUser: true, member });
+              }}
+              aria-label={`Xóa ${member.full_name}`}
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+      {selected && (
+        <div className="member-detail">
+          <div className="member-detail-heading">
+            <div>
+              <h4>{selected.user.full_name}</h4>
+              <p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="danger-button" onClick={() => setConfirm({ all: true })}>
+                <Trash2 size={15} /> Xóa toàn bộ công
+              </button>
+              <button
+                className="danger-button"
+                style={{ backgroundColor: '#dc2626', color: '#ffffff' }}
+                onClick={() => setConfirm({ deleteUser: true, member: selected.user })}
+              >
+                <UserMinus size={15} /> Xóa người này
+              </button>
+            </div>
+          </div>
+          <div className="user-info-grid">
+            <div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div>
+            <div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div>
+            <div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div>
+            <div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div>
+            <div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div>
+            <div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div>
+          </div>
+          <div className="imported-record-list">
+            {(selected.records || []).map((record) => (
+              <div className="imported-record" key={`${record.source}-${record.id}`}>
+                <span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>
+                <small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>
+                {record.source === 'Camera' && (
+                  <span className="record-photo-actions">
+                    <button type="button" disabled={!record.check_in_photo_available || record.check_in_photo_expired} onClick={() => openMemberPhoto(record, 'check-in')}>
+                      Ảnh vào{record.check_in_photo_expired ? ' · Hết hạn' : ''}
+                    </button>
+                    <button type="button" disabled={!record.check_out_photo_available || record.check_out_photo_expired} onClick={() => openMemberPhoto(record, 'check-out')}>
+                      Ảnh ra{record.check_out_photo_expired ? ' · Hết hạn' : ''}
+                    </button>
+                  </span>
+                )}
+                <button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button>
+              </div>
+            ))}
+            {!(selected.records || []).length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}
+          </div>
+        </div>
+      )}
+    </div>
+    {message && <div className="approval-note" style={{ marginTop: 14, fontSize: 13, fontWeight: 500 }}>{message}</div>}
     {confirm && (
       <div className="strict-delete-overlay">
         <div className="strict-delete-modal">
           <button className="modal-close" onClick={() => { setConfirm(null); setReason(''); }}>
             <X size={18} />
           </button>
-          <h3>Xác nhận xóa</h3>
-          <p>
-            Bạn có chắc chắn muốn xóa {confirm.bulk ? `toàn bộ công của ${selectedIds.length} sinh viên` : confirm.all ? 'toàn bộ công của sinh viên này' : 'ca làm việc này'}?
-          </p>
-          <textarea
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Nhập lý do xóa (không bắt buộc)..."
-            rows="3"
-          ></textarea>
-          <div className="modal-actions">
-            <button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy bỏ</button>
-            <button className="danger-button" onClick={confirm.bulk ? executeBulkDelete : executeDelete}>Xác nhận xóa</button>
-          </div>
+          {confirm.deleteUser ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#dc2626' }}>
+                <AlertTriangle size={24} />
+                <h3 style={{ color: '#dc2626', margin: 0 }}>Xác nhận xóa thành viên</h3>
+              </div>
+              <p style={{ fontSize: 13, lineHeight: 1.6, color: '#334155', margin: 0 }}>
+                Bạn có chắc chắn muốn xóa thành viên <strong>"{confirm.member?.full_name}"</strong> {confirm.member?.student_code ? `(MSSV: ${confirm.member.student_code})` : confirm.member?.username ? `(@${confirm.member.username})` : ''} vĩnh viễn khỏi hệ thống không?
+              </p>
+              <div style={{
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 8,
+                padding: '10px 12px',
+                fontSize: 12,
+                color: '#991b1b',
+                lineHeight: 1.5,
+              }}>
+                ⚠️ <strong>Cảnh báo quan trọng:</strong> Tất cả tài khoản, mật khẩu, dữ liệu chấm công và lịch sử đối soát liên quan của thành viên này sẽ bị xóa vĩnh viễn và không thể khôi phục!
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy bỏ</button>
+                <button
+                  className="danger-button"
+                  style={{ backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 600 }}
+                  onClick={() => executeDeleteUser(confirm.member)}
+                >
+                  Xác nhận xóa vĩnh viễn
+                </button>
+              </div>
+            </>
+          ) : confirm.bulkUser ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#dc2626' }}>
+                <AlertTriangle size={24} />
+                <h3 style={{ color: '#dc2626', margin: 0 }}>Xác nhận xóa {selectedIds.length} thành viên</h3>
+              </div>
+              <p style={{ fontSize: 13, lineHeight: 1.6, color: '#334155', margin: 0 }}>
+                Bạn có chắc chắn muốn xóa vĩnh viễn <strong>{selectedIds.length} thành viên đã chọn</strong> khỏi hệ thống không?
+              </p>
+              <div style={{
+                background: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: 8,
+                padding: '10px 12px',
+                fontSize: 12,
+                color: '#991b1b',
+                lineHeight: 1.5,
+              }}>
+                ⚠️ <strong>Cảnh báo quan trọng:</strong> Toàn bộ tài khoản và lịch sử chấm công của tất cả thành viên đã chọn sẽ bị xóa vĩnh viễn khỏi hệ thống!
+              </div>
+              <div className="modal-actions">
+                <button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy bỏ</button>
+                <button
+                  className="danger-button"
+                  style={{ backgroundColor: '#dc2626', color: '#ffffff', fontWeight: 600 }}
+                  onClick={executeBulkDeleteUsers}
+                >
+                  Xác nhận xóa tất cả đã chọn
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h3>Xác nhận xóa</h3>
+              <p>
+                Bạn có chắc chắn muốn xóa {confirm.bulk ? `toàn bộ công của ${selectedIds.length} sinh viên` : confirm.all ? 'toàn bộ công của sinh viên này' : 'ca làm việc này'}?
+              </p>
+              <textarea
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Nhập lý do xóa (không bắt buộc)..."
+                rows="3"
+              ></textarea>
+              <div className="modal-actions">
+                <button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy bỏ</button>
+                <button className="danger-button" onClick={confirm.bulk ? executeBulkDelete : executeDelete}>Xác nhận xóa</button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     )}
@@ -1726,6 +2037,608 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   return <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><motion.div className="face-modal" initial={{ scale: .94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}><div className="face-modal-header"><span className="section-label">FACE AUTHENTICATION</span><button className="modal-close" aria-label="Đóng" onClick={onClose}>✕</button></div><h2>{checkedIn ? 'Xác nhận check-out' : faceRegistered ? 'Xác thực check-in' : 'Đăng ký khuôn mặt'}</h2><div className="camera-stage">{cameraState === 'error' ? <div className="camera-message"><Camera size={30} /><strong>Không mở được camera</strong><span>{cameraError}</span></div> : <><video ref={videoRef} className="camera-video" autoPlay muted playsInline /><div className="scan-frame"><UserRound size={52} /><span /></div><div className="scan-line" /></>}</div><p>{cameraState === 'starting' ? 'Đang tải nhận diện khuôn mặt và yêu cầu quyền camera...' : cameraState === 'ready' ? 'Đưa khuôn mặt vào khung hình, sau đó xác nhận.' : 'Vui lòng cấp quyền camera và thử lại.'}</p>{cameraError && cameraState !== 'error' && <div className="camera-error">{cameraError}</div>}<button className="checkout-button" disabled={cameraState !== 'ready' || !modelReady || submitting} onClick={confirmAttendance}>{submitting ? 'ĐANG XÁC THỰC...' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN'}</button></motion.div></motion.div>;
 }
 
-function ForgotPassword({ onClose }) { return <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}><motion.div className="forgot-modal" initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }}><button className="modal-close" onClick={onClose}><X size={18} /></button><LockKeyhole size={25} /><h2>Quên mật khẩu?</h2><p>Nhập email hoặc MSSV để nhận hướng dẫn khôi phục trong tương lai.</p><input placeholder="Email hoặc MSSV" /><button className="primary-button" onClick={onClose}>GỬI YÊU CẦU</button></motion.div></motion.div>; }
+function RegisterModal({ onClose, onSuccess }) {
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState({
+    fullName: '',
+    username: '',
+    studentCode: '',
+    contact: '',
+    password: '',
+    confirmPassword: '',
+  });
+  const [otp, setOtp] = useState('');
+  const [smsOtp, setSmsOtp] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [timer, setTimer] = useState(300);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+
+  useEffect(() => {
+    let interval = null;
+    if (step === 2 && timer > 0) {
+      interval = setInterval(() => setTimer((prev) => prev - 1), 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [step, timer]);
+
+  function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  async function handleSendOtp(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+
+    if (!form.fullName.trim() || !form.username.trim() || !form.contact.trim() || !form.password) {
+      setError('Vui lòng nhập đầy đủ các thông tin bắt buộc (*).');
+      return;
+    }
+
+    if (form.contact.includes('@')) {
+      setError('Chức năng gửi OTP qua Email hiện đang được nâng cấp. Vui lòng sử dụng Số điện thoại để nhận mã xác thực hoặc thử lại sau.');
+      return;
+    }
+
+    if (form.password.length < 6) {
+      setError('Mật khẩu phải có độ dài từ 6 ký tự trở lên.');
+      return;
+    }
+
+    if (form.password !== form.confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/auth/send-register-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: form.fullName.trim(),
+          username: form.username.trim(),
+          studentCode: form.studentCode?.trim() || '',
+          contact: form.contact.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Không thể gửi mã OTP. Vui lòng thử lại.');
+      }
+      setSmsOtp(data.data?.otp || '');
+      setTimer(data.data?.expiresInSeconds || 300);
+      setStep(2);
+      setMessage(data.message || 'Mã xác thực đã được gửi thành công qua tin nhắn SMS.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResendOtp() {
+    setError('');
+    setMessage('');
+    setLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/auth/send-register-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: form.fullName.trim(),
+          username: form.username.trim(),
+          studentCode: form.studentCode?.trim() || '',
+          contact: form.contact.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Không thể gửi lại mã OTP.');
+      }
+      setSmsOtp(data.data?.otp || '');
+      setTimer(300);
+      setMessage('Đã gửi lại mã OTP mới qua tin nhắn SMS.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleVerifyAndRegister(event) {
+    event.preventDefault();
+    setError('');
+    if (!otp || otp.trim().length < 6) {
+      setError('Vui lòng nhập đủ 6 chữ số mã OTP.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/auth/register-with-otp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: form.fullName.trim(),
+          username: form.username.trim(),
+          studentCode: form.studentCode?.trim() || '',
+          contact: form.contact.trim(),
+          password: form.password,
+          otp: otp.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Đăng ký thất bại. Vui lòng thử lại.');
+      }
+
+      localStorage.setItem('attendance_token', data.data.token);
+      localStorage.setItem('attendance_user', JSON.stringify(data.data.user));
+      onSuccess(data.data.user);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <motion.div className="auth-modal-card" initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.94, opacity: 0 }}>
+        <div className="auth-modal-header">
+          <h3>
+            <UserPlus size={20} className="text-teal-700" />
+            {step === 1 ? 'Đăng ký tài khoản' : 'Xác thực mã OTP SMS'}
+          </h3>
+          <button className="modal-close" onClick={onClose} aria-label="Đóng">
+            <X size={18} />
+          </button>
+        </div>
+
+        {error && <div className="form-error" style={{ marginBottom: 14 }}>{error}</div>}
+        {message && <div className="form-success" style={{ marginBottom: 14 }}>{message}</div>}
+
+        {step === 1 ? (
+          <form onSubmit={handleSendOtp}>
+            <div className="auth-field-group">
+              <label>Họ và tên *</label>
+              <input
+                value={form.fullName}
+                onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                placeholder="Ví dụ: Nguyễn Văn A"
+                required
+              />
+            </div>
+
+            <div className="auth-field-row">
+              <div className="auth-field-group">
+                <label>Tên đăng nhập *</label>
+                <input
+                  value={form.username}
+                  onChange={(e) => setForm({ ...form, username: e.target.value })}
+                  placeholder="Nhập username mong muốn..."
+                  required
+                />
+              </div>
+              <div className="auth-field-group">
+                <label>MSSV <span style={{ color: '#94a3b8', fontSize: 12, fontWeight: 400 }}>(Tùy chọn)</span></label>
+                <input
+                  value={form.studentCode}
+                  onChange={(e) => setForm({ ...form, studentCode: e.target.value })}
+                  placeholder="Ví dụ: 21110123 (nếu có)"
+                />
+              </div>
+            </div>
+
+            <div className="auth-field-group">
+              <label>Số điện thoại nhận mã OTP (Email đang nâng cấp) *</label>
+              <input
+                value={form.contact}
+                onChange={(e) => setForm({ ...form, contact: e.target.value })}
+                placeholder="Nhập số điện thoại của bạn (ví dụ: 0912345678)..."
+                required
+              />
+            </div>
+
+            <div className="auth-field-row">
+              <div className="auth-field-group">
+                <label>Mật khẩu *</label>
+                <div className="password-field">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={form.password}
+                    onChange={(e) => setForm({ ...form, password: e.target.value })}
+                    placeholder="Ít nhất 6 ký tự"
+                    required
+                  />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)}>
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+              <div className="auth-field-group">
+                <label>Nhập lại mật khẩu *</label>
+                <div className="password-field">
+                  <input
+                    type={showConfirm ? 'text' : 'password'}
+                    value={form.confirmPassword}
+                    onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+                    placeholder="Nhập lại mật khẩu"
+                    required
+                  />
+                  <button type="button" onClick={() => setShowConfirm(!showConfirm)}>
+                    {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <button className="primary-button" type="submit" disabled={loading} style={{ marginTop: 12 }}>
+              {loading ? 'ĐANG GỬI MÃ...' : 'TIẾP TỤC & NHẬN MÃ OTP'}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleVerifyAndRegister}>
+            {smsOtp && (
+              <div style={{
+                background: '#ecfdf5',
+                border: '1px solid #6ee7b7',
+                borderRadius: 8,
+                padding: '10px 14px',
+                marginBottom: 14,
+                fontSize: 13,
+                color: '#065f46',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}>
+                <Smartphone size={18} className="text-teal-700" style={{ flexShrink: 0 }} />
+                <div>
+                  <strong>[Tin nhắn SMS đến {form.contact}]:</strong> Mã OTP của bạn là: <strong style={{ letterSpacing: 2, fontSize: 15 }}>{smsOtp}</strong>
+                </div>
+              </div>
+            )}
+            <p style={{ fontSize: 13, color: '#475569', margin: '0 0 16px', lineHeight: 1.5 }}>
+              Mã xác thực 6 chữ số đã được gửi qua SMS đến: <strong>{form.contact}</strong>. Vui lòng nhập mã để hoàn tất:
+            </p>
+
+            <div className="otp-box-wrap">
+              <input
+                className="otp-digit-input"
+                type="text"
+                maxLength={6}
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                placeholder="••••••"
+                autoFocus
+                required
+              />
+              <div className="otp-timer-info">
+                <span>Hiệu lực còn: <strong style={{ color: timer > 0 ? '#0d9488' : '#dc2626' }}>{formatTime(timer)}</strong></span>
+                <button
+                  type="button"
+                  className="btn-resend-otp"
+                  disabled={loading || timer > 240}
+                  onClick={handleResendOtp}
+                >
+                  Gửi lại mã
+                </button>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 16 }}>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ flex: 1, padding: 12 }}
+                onClick={() => setStep(1)}
+                disabled={loading}
+              >
+                <ArrowLeft size={16} /> Quay lại
+              </button>
+              <button
+                className="primary-button"
+                type="submit"
+                style={{ flex: 2, margin: 0 }}
+                disabled={loading || !otp || otp.length < 6}
+              >
+                {loading ? 'ĐANG XÁC THỰC...' : 'XÁC NHẬN ĐĂNG KÝ'}
+              </button>
+            </div>
+          </form>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function ForgotPasswordModal({ onClose }) {
+  const [step, setStep] = useState(1);
+  const [form, setForm] = useState({
+    username: '',
+    contactInfo: '',
+  });
+  const [maskedContact, setMaskedContact] = useState('');
+  const [otp, setOtp] = useState('');
+  const [smsOtp, setSmsOtp] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [timer, setTimer] = useState(300);
+
+  useEffect(() => {
+    let interval = null;
+    if (step === 2 && timer > 0) {
+      interval = setInterval(() => setTimer((prev) => prev - 1), 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [step, timer]);
+
+  function formatTime(seconds) {
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+
+  async function handleSendForgotOtp(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+    if (!form.username.trim() || !form.contactInfo.trim()) {
+      setError('Vui lòng nhập đầy đủ Tên đăng nhập và Số điện thoại.');
+      return;
+    }
+
+    if (form.contactInfo.includes('@')) {
+      setError('Chức năng gửi OTP qua Email hiện đang được nâng cấp. Vui lòng sử dụng Số điện thoại để nhận mã xác thực hoặc thử lại sau.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: form.username.trim(),
+          contactInfo: form.contactInfo.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Không thể gửi mã khôi phục.');
+      }
+      setMaskedContact(data.data?.maskedContact || form.contactInfo);
+      setSmsOtp(data.data?.otp || '');
+      setTimer(data.data?.expiresInSeconds || 300);
+      setStep(2);
+      setMessage(data.message || 'Mã xác thực OTP đã được gửi qua tin nhắn SMS.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResetPassword(event) {
+    event.preventDefault();
+    setError('');
+    setMessage('');
+
+    if (!otp || otp.trim().length < 6) {
+      setError('Vui lòng nhập đủ 6 chữ số mã OTP.');
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setError('Mật khẩu mới phải có ít nhất 6 ký tự.');
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setError('Mật khẩu xác nhận không khớp.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/auth/reset-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: form.username.trim(),
+          contact: form.contactInfo.trim(),
+          otp: otp.trim(),
+          newPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Đặt lại mật khẩu thất bại.');
+      }
+      setStep(3);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+      <motion.div className="auth-modal-card" initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.94, opacity: 0 }}>
+        <div className="auth-modal-header">
+          <h3>
+            <KeyRound size={20} className="text-red-600" />
+            {step === 1 ? 'Quên mật khẩu' : step === 2 ? 'Đặt lại mật khẩu' : 'Thành công'}
+          </h3>
+          <button className="modal-close" onClick={onClose} aria-label="Đóng">
+            <X size={18} />
+          </button>
+        </div>
+
+        {error && <div className="form-error" style={{ marginBottom: 14 }}>{error}</div>}
+        {message && step !== 3 && <div className="form-success" style={{ marginBottom: 14 }}>{message}</div>}
+
+        {step === 1 && (
+          <form onSubmit={handleSendForgotOtp}>
+            <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.5 }}>
+              Vui lòng cung cấp <strong>Tên đăng nhập</strong> và <strong>Số điện thoại</strong> đã đăng ký để nhận mã OTP qua SMS (Chức năng Email đang nâng cấp):
+            </p>
+            <div className="auth-field-group">
+              <label>Tên tài khoản (Username) *</label>
+              <input
+                value={form.username}
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                placeholder="Nhập tên đăng nhập của bạn..."
+                autoFocus
+                required
+              />
+            </div>
+            <div className="auth-field-group">
+              <label>Số điện thoại đã đăng ký (Email đang nâng cấp) *</label>
+              <input
+                value={form.contactInfo}
+                onChange={(e) => setForm({ ...form, contactInfo: e.target.value })}
+                placeholder="Nhập số điện thoại đã đăng ký..."
+                required
+              />
+            </div>
+            <button className="primary-button" type="submit" disabled={loading} style={{ marginTop: 12 }}>
+              {loading ? 'ĐANG KIỂM TRA...' : 'GỬI MÃ XÁC THỰC OTP'}
+            </button>
+          </form>
+        )}
+
+        {step === 2 && (
+          <form onSubmit={handleResetPassword}>
+            {smsOtp && (
+              <div style={{
+                background: '#ecfdf5',
+                border: '1px solid #6ee7b7',
+                borderRadius: 8,
+                padding: '10px 14px',
+                marginBottom: 14,
+                fontSize: 13,
+                color: '#065f46',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}>
+                <Smartphone size={18} className="text-teal-700" style={{ flexShrink: 0 }} />
+                <div>
+                  <strong>[Tin nhắn SMS đến {maskedContact}]:</strong> Mã OTP của bạn là: <strong style={{ letterSpacing: 2, fontSize: 15 }}>{smsOtp}</strong>
+                </div>
+              </div>
+            )}
+            <p style={{ fontSize: 13, color: '#475569', margin: '0 0 16px', lineHeight: 1.5 }}>
+              Mã xác thực đã gửi qua SMS tới <strong>{maskedContact}</strong>. Vui lòng nhập mã OTP và thiết lập mật khẩu mới:
+            </p>
+
+            <div className="auth-field-group">
+              <label>Mã xác thực OTP (6 số) *</label>
+              <input
+                className="otp-digit-input"
+                type="text"
+                maxLength={6}
+                value={otp}
+                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))}
+                placeholder="••••••"
+                autoFocus
+                required
+              />
+              <div className="otp-timer-info">
+                <span>Hiệu lực còn: <strong style={{ color: timer > 0 ? '#dc2626' : '#94a3b8' }}>{formatTime(timer)}</strong></span>
+                <button
+                  type="button"
+                  className="btn-resend-otp"
+                  disabled={loading || timer > 240}
+                  onClick={handleSendForgotOtp}
+                >
+                  Gửi lại mã
+                </button>
+              </div>
+            </div>
+
+            <div className="auth-field-group" style={{ marginTop: 14 }}>
+              <label>Mật khẩu mới *</label>
+              <div className="password-field">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="Tối thiểu 6 ký tự"
+                  required
+                />
+                <button type="button" onClick={() => setShowPassword(!showPassword)}>
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+            </div>
+
+            <div className="auth-field-group">
+              <label>Xác nhận mật khẩu mới *</label>
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                placeholder="Nhập lại mật khẩu mới"
+                required
+              />
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+              <button
+                type="button"
+                className="secondary-button"
+                style={{ flex: 1, padding: 12 }}
+                onClick={() => setStep(1)}
+                disabled={loading}
+              >
+                <ArrowLeft size={16} /> Quay lại
+              </button>
+              <button
+                className="primary-button"
+                type="submit"
+                style={{ flex: 2, margin: 0 }}
+                disabled={loading || !otp || otp.length < 6}
+              >
+                {loading ? 'ĐANG CẬP NHẬT...' : 'ĐẶT LẠI MẬT KHẨU'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {step === 3 && (
+          <div style={{ textAlign: 'center', padding: '20px 10px' }}>
+            <div style={{ width: 60, height: 60, background: '#dcfce7', color: '#16a34a', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}>
+              <Check size={32} />
+            </div>
+            <h4 style={{ color: '#0f172a', fontSize: 18, margin: '0 0 8px', fontWeight: 700 }}>Đổi mật khẩu thành công!</h4>
+            <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 24px', lineHeight: 1.5 }}>
+              Mật khẩu của bạn đã được cập nhật an toàn. Bạn có thể tiến hành đăng nhập với mật khẩu mới.
+            </p>
+            <button className="primary-button" type="button" onClick={onClose}>
+              ĐĂNG NHẬP NGAY
+            </button>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
+  );
+}
 
 export default App;
