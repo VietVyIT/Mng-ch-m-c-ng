@@ -69,6 +69,35 @@ Mở trình duyệt:
 
 ---
 
+## Triển khai bằng Docker (Dành cho Production / Test nhanh)
+
+Nếu bạn đã có sẵn Docker Desktop (trên Windows/Mac) hoặc Docker Engine (trên Linux VPS), bạn có thể dựng toàn bộ hệ thống lên chỉ bằng 1 dòng lệnh mà không cần cài đặt Node.js hay MySQL rườm rà.
+
+### Bước 1: Chuẩn bị file biến môi trường
+
+```bash
+# Copy file môi trường (Nạp thông tin thật nếu deploy lên VPS)
+cp .env.example .env
+```
+*(Nếu bạn chạy ở máy tính local để test, nhớ tắt các phần mềm đang chiếm cổng 3306 như XAMPP hoặc sửa `3306:3306` thành `3307:3306` trong `docker-compose.yml` nhé).*
+
+### Bước 2: Khởi chạy
+
+Bạn có thể chạy lệnh này ở thư mục gốc:
+
+```bash
+# Sử dụng script npm đã cấu hình sẵn
+npm run docker:up
+
+# Hoặc dùng lệnh trực tiếp của Docker Compose
+docker compose up -d --build
+```
+Để dừng hệ thống, bạn có thể chạy `npm run docker:down` hoặc `docker compose down`.
+
+*(Tài liệu chi tiết hơn về cách deploy lên VPS bằng Docker nằm ở file `deployment_guide.md`)*
+
+---
+
 ## Tài khoản thử nghiệm
 
 | Vai trò | Username | Password | Ghi chú |
