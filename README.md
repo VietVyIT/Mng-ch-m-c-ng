@@ -156,9 +156,15 @@ JWT_SECRET=<random-secret-at-least-32-characters>
 FACE_MATCH_THRESHOLD=0.6
 ```
 
-`CLIENT_URL` là biến bắt buộc và phải là URL frontend thật, ví dụ
-`https://mng-ch-m-c-ng-client.vercel.app`, không có dấu `/` cuối. Nếu thiếu,
-backend dừng với lỗi `Thiếu biến môi trường bắt buộc: CLIENT_URL`.
+`JWT_SECRET`, `DB_HOST` (hoặc `MYSQLHOST`), `DB_NAME` (hoặc
+`MYSQLDATABASE`) và `DB_USER` (hoặc `MYSQLUSER`) là các biến bắt buộc khi
+backend khởi động. `CLIENT_URL` không làm backend crash khi thiếu nhưng phải
+được cấu hình để CORS chỉ cho phép frontend production, ví dụ
+`https://mng-ch-m-c-ng-client.vercel.app`, không có dấu `/` cuối.
+
+Nếu thiếu `JWT_SECRET`, backend dừng với lỗi
+`Thiếu biến môi trường bắt buộc: JWT_SECRET`. Không commit secret thật vào
+repository; hãy tạo và lưu secret trong Railway Variables.
 
 Tạo JWT secret an toàn:
 
