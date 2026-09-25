@@ -20,7 +20,10 @@ const app = express();
 
 app.disable('x-powered-by');
 app.use(helmet());
-app.use(cors({ origin: env.clientUrl || true })); // Allow same-origin or all if not specified
+app.use(cors({ 
+  origin: env.clientUrl ? env.clientUrl.trim() : true,
+  credentials: true 
+}));
 app.use(express.json({ limit: '10mb' }));
 app.use('/api/auth/login', rateLimit({
   windowMs: 5 * 60 * 1000,
