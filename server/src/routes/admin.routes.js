@@ -318,6 +318,171 @@ router.post('/announcements', async (request, response, next) => {
   }
 });
 
+router.get('/dashboard-stats', async (request, response, next) => {
+  try {
+    await ensureImportedAttendanceTable(pool);
+    const range = String(request.query.range || '7days').toLowerCase();
+    const selectedDate = typeof request.query.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(request.query.date)
+      ? request.query.date
+      : new Date().toISOString().slice(0, 10);
+
+    // 1. Total work days: sum of users.total_work_days
+    const [totalWorkDaysRow] = await pool.execute(
+      "SELECT COALESCE(SUM(total_work_days), 0) AS total FROM users WHERE role = 'USER'",
+    );
+    const totalWorkDays = Number(totalWorkDaysRow[0].total) || 0;
+    const totalHours = totalWorkDays * 8;
+
+    // 2. Total students
+    const [totalStudentsRow] = await pool.execute(
+      "SELECT COUNT(*) AS total FROM users WHERE role = 'USER'",
+    );
+    const totalStudents = Number(totalStudentsRow[0].total) || 0;
+
+    // 3. Check-in count for selectedDate (unique users)
+    const [dateCheckinRow] = await pool.execute(
+      `SELECT COUNT(DISTINCT user_id) AS count FROM (
+         SELECT user_id FROM attendance WHERE attendance_date = ?
+         UNION
+         SELECT user_id FROM imported_attendance_records WHERE attendance_date = ?
+       ) combined`,
+      [selectedDate, selectedDate],
+    );
+    const todayCheckins = Number(dateCheckinRow[0].count) || 0;
+
+    // 4. Pending approval count
+    const [pendingRow] = await pool.execute(
+      "SELECT COUNT(*) AS count FROM attendance_events WHERE status = 'PENDING'",
+    );
+    const pendingCount = Number(pendingRow[0].count) || 0;
+
+    // 5. Determine date range for trend chart
+    let startDate, endDate;
+    if (range === 'all') {
+      const [rangeRow] = await pool.execute(
+        `SELECT MIN(min_date) AS start_date, MAX(max_date) AS end_date FROM (
+           SELECT MIN(attendance_date) AS min_date, MAX(attendance_date) AS max_date FROM attendance
+           UNION ALL
+           SELECT MIN(attendance_date) AS min_date, MAX(attendance_date) AS max_date FROM imported_attendance_records
+         ) ranges`,
+      );
+      startDate = rangeRow[0].start_date;
+      endDate = rangeRow[0].end_date;
+      if (!startDate || !endDate) {
+        startDate = selectedDate;
+        endDate = selectedDate;
+      }
+    } else {
+      endDate = selectedDate;
+      // Go 6 days back so we have 7 days total
+      const d = new Date(selectedDate);
+      d.setDate(d.getDate() - 6);
+      startDate = d.toISOString().slice(0, 10);
+    }
+
+    // 6. Build trend: imported_attendance_records count as onTime, camera records split by punctuality
+    const [trendRows] = await pool.execute(
+      `SELECT
+         all_dates.dt AS date,
+         COALESCE(cam_ontime.count, 0) AS cam_ontime,
+         COALESCE(cam_late.count, 0) AS cam_late,
+         COALESCE(imp.count, 0) AS imported
+       FROM (
+         SELECT DISTINCT attendance_date AS dt FROM attendance
+           WHERE attendance_date >= ? AND attendance_date <= ?
+         UNION
+         SELECT DISTINCT attendance_date AS dt FROM imported_attendance_records
+           WHERE attendance_date >= ? AND attendance_date <= ?
+       ) all_dates
+       LEFT JOIN (
+         SELECT attendance_date, COUNT(*) AS count
+         FROM attendance
+         WHERE attendance_date >= ? AND attendance_date <= ?
+           AND (punctuality_status = 'ON_TIME' OR (punctuality_status IS NULL AND (is_late = FALSE OR is_late IS NULL)))
+         GROUP BY attendance_date
+       ) cam_ontime ON cam_ontime.attendance_date = all_dates.dt
+       LEFT JOIN (
+         SELECT attendance_date, COUNT(*) AS count
+         FROM attendance
+         WHERE attendance_date >= ? AND attendance_date <= ?
+           AND (punctuality_status = 'LATE' OR is_late = TRUE)
+         GROUP BY attendance_date
+       ) cam_late ON cam_late.attendance_date = all_dates.dt
+       LEFT JOIN (
+         SELECT attendance_date, COUNT(*) AS count
+         FROM imported_attendance_records
+         WHERE attendance_date >= ? AND attendance_date <= ?
+         GROUP BY attendance_date
+       ) imp ON imp.attendance_date = all_dates.dt
+       ORDER BY all_dates.dt ASC`,
+      [startDate, endDate, startDate, endDate, startDate, endDate, startDate, endDate, startDate, endDate],
+    );
+
+    const trend = trendRows.map((row) => {
+      const d = new Date(row.date);
+      return {
+        date: row.date instanceof Date ? row.date.toISOString().slice(0, 10) : String(row.date).slice(0, 10),
+        label: d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }),
+        fullLabel: d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+        onTime: Number(row.imported) + Number(row.cam_ontime),
+        late: Number(row.cam_late),
+      };
+    });
+
+    // 7. Shift distribution for the selectedDate
+    const [shiftDistRows] = await pool.execute(
+      `SELECT shift_code, shift_name, COUNT(*) AS count
+       FROM (
+         SELECT shift_code, shift_name FROM attendance WHERE attendance_date = ?
+         UNION ALL
+         SELECT shift_code, shift_name FROM imported_attendance_records WHERE attendance_date = ?
+       ) combined
+       GROUP BY shift_code, shift_name
+       ORDER BY FIELD(shift_code, 'MORNING', 'AFTERNOON', 'EVENING')`,
+      [selectedDate, selectedDate],
+    );
+
+    const shiftDistribution = shiftDistRows.map((row) => ({
+      code: row.shift_code,
+      name: row.shift_name,
+      count: Number(row.count),
+    }));
+
+    // 8. Date range metadata
+    const [allDateRange] = await pool.execute(
+      `SELECT MIN(min_date) AS start_date, MAX(max_date) AS end_date FROM (
+         SELECT MIN(attendance_date) AS min_date, MAX(attendance_date) AS max_date FROM attendance
+         UNION ALL
+         SELECT MIN(attendance_date) AS min_date, MAX(attendance_date) AS max_date FROM imported_attendance_records
+       ) ranges`,
+    );
+    const periodStart = allDateRange[0].start_date
+      ? (allDateRange[0].start_date instanceof Date ? allDateRange[0].start_date.toISOString().slice(0, 10) : String(allDateRange[0].start_date).slice(0, 10))
+      : null;
+    const periodEnd = allDateRange[0].end_date
+      ? (allDateRange[0].end_date instanceof Date ? allDateRange[0].end_date.toISOString().slice(0, 10) : String(allDateRange[0].end_date).slice(0, 10))
+      : null;
+
+    return response.json({
+      success: true,
+      data: {
+        selectedDate,
+        range,
+        totalWorkDays,
+        totalHours,
+        totalStudents,
+        todayCheckins,
+        pendingCount,
+        trend,
+        shiftDistribution,
+        period: { start: periodStart, end: periodEnd },
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get('/shifts/:date', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(

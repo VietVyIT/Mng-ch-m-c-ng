@@ -54,8 +54,7 @@ const userNavItems = [
   { label: 'Hồ sơ', icon: UserRound },
 ];
 
-// Dữ liệu thật sẽ được nạp từ API dashboard. Null nghĩa là chưa có dữ liệu.
-const attendanceData = null;
+// Dashboard data sẽ được fetch từ API /admin/dashboard-stats.
 const PHOTO_MAX_BYTES = 15 * 1024;
 
 const IMPORT_SHIFTS = {
@@ -698,7 +697,11 @@ function AdminDashboard({ user }) {
   const [photoPreview, setPhotoPreview] = useState(null);
   const [showAllModal, setShowAllModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
-  const hasAttendanceData = Array.isArray(attendanceData) && attendanceData.length > 0;
+  const [dashboardStats, setDashboardStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [chartRange, setChartRange] = useState('7days');
+  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
+  const hasAttendanceData = dashboardStats?.trend?.some((d) => d.onTime > 0 || d.late > 0);
   const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     day: '2-digit',
@@ -719,6 +722,31 @@ function AdminDashboard({ user }) {
     } catch (err) {
       console.error('Lỗi tải danh sách duyệt:', err);
     }
+  }
+
+  async function loadDashboardStats(range = chartRange, date = selectedDate) {
+    const token = localStorage.getItem('attendance_token');
+    try {
+      const response = await fetch(`${apiUrl}/admin/dashboard-stats?range=${range}&date=${date}`, { headers: { Authorization: `Bearer ${token}` } });
+      const body = await response.json();
+      if (body.success) setDashboardStats(body.data);
+    } catch (err) {
+      console.error('Lỗi tải dashboard stats:', err);
+    } finally {
+      setStatsLoading(false);
+    }
+  }
+
+  function handleChartRangeChange(newRange) {
+    setChartRange(newRange);
+    setStatsLoading(true);
+    loadDashboardStats(newRange, selectedDate);
+  }
+
+  function handleChartDateSelect(dateStr) {
+    setSelectedDate(dateStr);
+    setStatsLoading(true);
+    loadDashboardStats(chartRange, dateStr);
   }
 
   useEffect(() => {
@@ -745,6 +773,7 @@ function AdminDashboard({ user }) {
         setApprovals(approvalBody.data || []);
         setEveningEnabled(shiftBody.data?.eveningEnabled !== false);
       }).catch(() => {});
+      loadDashboardStats();
     }
   }, []);
 
@@ -859,8 +888,25 @@ function AdminDashboard({ user }) {
   return <div className="admin-dashboard">
     <section className="dashboard-intro"><div><span className="section-label">{currentDateStr}</span><h2>Xin chào, {user.role === 'ADMIN' ? 'Quản trị viên' : (user.fullName || user.username)}</h2><p>Tóm tắt hoạt động chấm công và yêu cầu trong ngày hôm nay.</p></div><div className="world-map" aria-label="World map illustration"><span /><span /><span /><span /><span /><span /><span /><span /></div></section>
     <span className="overview-label">OVERVIEW</span>
-    <section className="metric-grid dark-metrics"><Metric icon={CalendarCheck} title="Tổng ngày công" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={Clock3} title="Tổng giờ" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={BarChart3} title="Đã chấm hôm nay" value={hasAttendanceData ? '—' : '—'} note={hasAttendanceData ? '' : 'Chưa có dữ liệu'} /><Metric icon={UsersRound} title="Vai trò ADMIN" value="ADMIN" note="Quyền quản trị hệ thống" chart="user" /></section>
-    <section className="dashboard-panels admin-panels"><div className="content-panel activity-panel"><div className="panel-heading"><div><h3>Hoạt động chấm công</h3><p>Tổng quan trong 7 ngày gần nhất</p></div><span className="panel-filter">7 ngày⌄</span></div>{hasAttendanceData ? <AttendanceChart data={attendanceData} /> : <EmptyAttendanceState />}</div><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>Thông tin ca làm việc</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{todayShift?.current?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span><strong>{todayShift?.current ? `${todayShift.current.start.slice(0, 5)} — ${todayShift.current.end.slice(0, 5)}` : '07:30 — 12:00'}</strong></div><div className="status-line"><span>Ca khả dụng</span><strong>{todayShift?.shifts?.map((shift) => shift.name).join(' · ') || 'Ca sáng · Ca chiều'}</strong></div><div className="status-line"><span>Check-in</span><strong className="empty-value">{latestAttendance?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong className="empty-value">{latestAttendance?.check_out || '—:—'}</strong></div><div className="face-preview"><div className="face-radar"><Camera size={24} /><i /></div><span>{checkedIn ? 'Đã check-in, có thể check-out' : 'Camera cần xác thực khuôn mặt'}</span></div><button className="checkout-button face-action" disabled={!checkedIn && !(todayShift?.shifts?.length)} onClick={() => setFaceModal(true)}>{checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} /></button></div></div></section>
+    <section className="metric-grid dark-metrics">
+      <Metric icon={CalendarCheck} title="Tổng ngày công" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.totalWorkDays} công` : '0 công'} note={dashboardStats ? `${dashboardStats.totalStudents} sinh viên` : 'Đang tải...'} chart="gauge" />
+      <Metric icon={Clock3} title="Tổng giờ" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.totalHours.toLocaleString('vi-VN')} giờ` : '0 giờ'} note="1 công = 8 giờ" chart="line" />
+      <Metric icon={BarChart3} title={selectedDate === new Date().toISOString().slice(0, 10) ? 'Đã chấm hôm nay' : `Chấm công ${new Date(selectedDate).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`} value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.todayCheckins}/${dashboardStats.totalStudents}` : '0/0'} note={dashboardStats && dashboardStats.totalStudents > 0 ? `${Math.round((dashboardStats.todayCheckins / dashboardStats.totalStudents) * 100)}% sinh viên` : 'Chưa có sinh viên'} chart="donut" />
+      <Metric icon={UsersRound} title="Chờ duyệt" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.pendingCount}` : '0'} note="Yêu cầu đang chờ xử lý" chart="user" />
+    </section>
+    <section className="dashboard-panels admin-panels">
+      <div className="content-panel activity-panel">
+        <div className="panel-heading">
+          <h3>Hoạt động chấm công</h3>
+          <select className="panel-range-select" value={chartRange} onChange={(e) => handleChartRangeChange(e.target.value)}>
+            <option value="7days">7 ngày gần nhất</option>
+            <option value="all">Toàn bộ kỳ chấm công</option>
+          </select>
+        </div>
+        {hasAttendanceData
+          ? <AttendanceChart data={dashboardStats.trend} selectedDate={selectedDate} onDateSelect={handleChartDateSelect} />
+          : <EmptyAttendanceState />}
+      </div><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>Thông tin ca làm việc</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{todayShift?.current?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span><strong>{todayShift?.current ? `${todayShift.current.start.slice(0, 5)} — ${todayShift.current.end.slice(0, 5)}` : '07:30 — 12:00'}</strong></div><div className="status-line"><span>Ca khả dụng</span><strong>{todayShift?.shifts?.map((shift) => shift.name).join(' · ') || 'Ca sáng · Ca chiều'}</strong></div><div className="status-line"><span>Check-in</span><strong className="empty-value">{latestAttendance?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong className="empty-value">{latestAttendance?.check_out || '—:—'}</strong></div><div className="face-preview"><div className="face-radar"><Camera size={24} /><i /></div><span>{checkedIn ? 'Đã check-in, có thể check-out' : 'Camera cần xác thực khuôn mặt'}</span></div><button className="checkout-button face-action" disabled={!checkedIn && !(todayShift?.shifts?.length)} onClick={() => setFaceModal(true)}>{checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} /></button></div></div></section>
     <section className="approval-panel content-panel">
       <div className="panel-heading">
         <div>
@@ -1123,30 +1169,185 @@ function Metric({ icon: Icon, title, value, note, chart }) { return <motion.div 
 
 function EmptyAttendanceState() { return <div className="empty-attendance"><BarChart3 size={30} /><strong>Chưa có dữ liệu chấm công.</strong><span>Dữ liệu sẽ xuất hiện sau khi bắt đầu chấm công.</span></div>; }
 
-function AttendanceChart({ data }) {
+function AttendanceChart({ data, selectedDate, onDateSelect }) {
   const canvasRef = useRef(null);
+  const chartInstanceRef = useRef(null);
+
   useEffect(() => {
     if (!canvasRef.current || !Array.isArray(data) || data.length === 0) return undefined;
+    if (chartInstanceRef.current) chartInstanceRef.current.destroy();
+
+    const ctx = canvasRef.current.getContext('2d');
+    const selectedIndex = data.findIndex((d) => d.date === selectedDate);
+
+    // --- Gradient factory ---
+    function createGradient(baseTop, baseBottom, highlightTop, highlightBottom) {
+      return data.map((_, i) => {
+        const grad = ctx.createLinearGradient(0, 0, 0, 300);
+        if (i === selectedIndex) {
+          grad.addColorStop(0, highlightTop);
+          grad.addColorStop(1, highlightBottom);
+        } else {
+          grad.addColorStop(0, baseTop);
+          grad.addColorStop(1, baseBottom);
+        }
+        return grad;
+      });
+    }
+
+    const onTimeGradients = createGradient('#3B82F6', '#1D4ED8', '#60A5FA', '#2563EB');
+    const lateGradients = createGradient('#F59E0B', '#EA580C', '#FBBF24', '#F59E0B');
+
     const chart = new Chart(canvasRef.current, {
       type: 'bar',
       data: {
         labels: data.map((item) => item.label),
         datasets: [
-          { label: 'On Time', data: data.map((item) => item.onTime), backgroundColor: '#2563eb', borderRadius: 3 },
-          { label: 'Late', data: data.map((item) => item.late), backgroundColor: '#f97316', borderRadius: 3 },
-          { label: 'Early', data: data.map((item) => item.early), backgroundColor: '#2dd4bf', borderRadius: 3 },
+          {
+            label: 'Đúng giờ',
+            data: data.map((item) => item.onTime),
+            backgroundColor: onTimeGradients,
+            hoverBackgroundColor: '#60A5FA',
+            borderColor: data.map((_, i) => i === selectedIndex ? '#93C5FD' : 'transparent'),
+            borderWidth: data.map((_, i) => i === selectedIndex ? 2 : 0),
+            borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
+            borderSkipped: 'bottom',
+            maxBarThickness: 28,
+            barPercentage: 0.65,
+            categoryPercentage: 0.8,
+          },
+          {
+            label: 'Đi trễ',
+            data: data.map((item) => item.late),
+            backgroundColor: lateGradients,
+            hoverBackgroundColor: '#FBBF24',
+            borderColor: data.map((_, i) => i === selectedIndex ? '#FCD34D' : 'transparent'),
+            borderWidth: data.map((_, i) => i === selectedIndex ? 2 : 0),
+            borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
+            borderSkipped: 'bottom',
+            maxBarThickness: 28,
+            barPercentage: 0.65,
+            categoryPercentage: 0.8,
+          },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: true, position: 'bottom', labels: { color: '#64748b', boxWidth: 8, font: { family: 'Poppins', size: 10 } } } },
-        scales: { x: { stacked: true, grid: { display: false }, ticks: { color: '#94a3b8', font: { family: 'Poppins', size: 9 } } }, y: { stacked: true, beginAtZero: true, grid: { color: '#e2e8f0' }, ticks: { color: '#94a3b8', font: { family: 'Poppins', size: 9 } } } },
+        interaction: { mode: 'index', intersect: false },
+        onClick: (_event, elements) => {
+          if (elements.length > 0 && onDateSelect) {
+            const idx = elements[0].index;
+            const clickedDate = data[idx]?.date;
+            if (clickedDate) onDateSelect(clickedDate);
+          }
+        },
+        onHover: (event, elements) => {
+          event.native.target.style.cursor = elements.length > 0 ? 'pointer' : 'default';
+        },
+        plugins: {
+          legend: {
+            display: true,
+            position: 'bottom',
+            labels: {
+              color: '#64748B',
+              boxWidth: 12,
+              boxHeight: 12,
+              borderRadius: 3,
+              useBorderRadius: true,
+              padding: 20,
+              font: { family: 'Poppins', size: 11, weight: '500' },
+            },
+          },
+          tooltip: {
+            enabled: true,
+            backgroundColor: '#0F172A',
+            titleColor: '#F1F5F9',
+            bodyColor: '#CBD5E1',
+            footerColor: '#94A3B8',
+            borderColor: '#334155',
+            borderWidth: 1,
+            cornerRadius: 8,
+            padding: { top: 12, bottom: 12, left: 14, right: 14 },
+            titleFont: { family: 'Poppins', size: 13, weight: '600' },
+            bodyFont: { family: 'Poppins', size: 11, weight: '400' },
+            footerFont: { family: 'Poppins', size: 10, weight: '600' },
+            titleMarginBottom: 8,
+            bodySpacing: 6,
+            footerMarginTop: 8,
+            displayColors: true,
+            boxWidth: 8,
+            boxHeight: 8,
+            boxPadding: 6,
+            usePointStyle: true,
+            callbacks: {
+              title: (items) => {
+                const idx = items[0]?.dataIndex;
+                if (idx == null || !data[idx]) return '';
+                return `📅  ${data[idx].fullLabel}`;
+              },
+              label: (item) => {
+                const icon = item.datasetIndex === 0 ? '🟦' : '🟧';
+                return `${icon}  ${item.dataset.label}:  ${item.raw} lượt`;
+              },
+              footer: (items) => {
+                const idx = items[0]?.dataIndex;
+                if (idx == null || !data[idx]) return '';
+                const d = data[idx];
+                return `━━━━━━━━━━━━━━\n📊  Tổng cộng:  ${d.onTime + d.late} lượt`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            stacked: true,
+            grid: { display: false },
+            border: { display: false },
+            ticks: {
+              color: (ctx) => {
+                const dateStr = data[ctx.index]?.date;
+                return dateStr === selectedDate ? '#3B82F6' : '#64748B';
+              },
+              font: (ctx) => {
+                const dateStr = data[ctx.index]?.date;
+                return {
+                  family: 'Poppins',
+                  size: data.length > 15 ? 9 : 12,
+                  weight: dateStr === selectedDate ? '700' : '500',
+                };
+              },
+              maxRotation: data.length > 14 ? 45 : 0,
+              padding: 6,
+            },
+          },
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            border: { display: false, dash: [4, 4] },
+            grid: {
+              color: 'rgba(226, 232, 240, 0.6)',
+              lineWidth: 0.8,
+              borderDash: [4, 4],
+            },
+            ticks: {
+              color: '#94A3B8',
+              font: { family: 'Poppins', size: 11, weight: '500' },
+              padding: 8,
+              precision: 0,
+            },
+          },
+        },
+        layout: {
+          padding: { top: 4, bottom: 0, left: 0, right: 4 },
+        },
       },
     });
-    return () => chart.destroy();
-  }, [data]);
-  return <div className="chart-canvas-wrap"><canvas ref={canvasRef} aria-label="Biểu đồ chấm công 7 ngày" /></div>;
+    chartInstanceRef.current = chart;
+    return () => { chart.destroy(); chartInstanceRef.current = null; };
+  }, [data, selectedDate]);
+
+  return <div className="chart-canvas-wrap"><canvas ref={canvasRef} aria-label="Biểu đồ hoạt động chấm công" /></div>;
 }
 
 function ApprovalRow({ event, onPreview, onReview, onReject }) {
