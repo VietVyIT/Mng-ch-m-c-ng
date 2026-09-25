@@ -77,7 +77,7 @@ Nếu bạn đã có sẵn Docker Desktop (trên Windows/Mac) hoặc Docker Engi
 
 ```bash
 # Copy file môi trường (Nạp thông tin thật nếu deploy lên VPS)
-cp .env.example .env
+cp .env.docker.example .env.docker
 ```
 *(Nếu bạn chạy ở máy tính local để test, nhớ tắt các phần mềm đang chiếm cổng 3306 như XAMPP hoặc sửa `3306:3306` thành `3307:3306` trong `docker-compose.yml` nhé).*
 
