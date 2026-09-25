@@ -2,99 +2,72 @@
 
 Hệ thống tra cứu & quản lý ngày công sinh viên với nhận diện khuôn mặt.
 
-## Công nghệ
+**Công nghệ:** React 19 · Vite · Express · MySQL 8.0 · JWT · Face-API
 
-- **Frontend:** React 19 · Vite · Chart.js · Face-API · Framer Motion
-- **Backend:** Node.js 18+ · Express · JWT · bcrypt · mysql2
-- **Database:** MySQL 8.0
-- **Triển khai:** Docker · Vercel · Railway
+---
 
-## Yêu cầu
+## Cài đặt
 
-- Node.js 18+ và npm 9+
-- MySQL 8.0+
-- Docker (nếu dùng Docker)
-
-## Cài đặt local
+### Bước 1: Cài đặt dependencies
 
 ```bash
-# 1. Clone và cài dependencies
-git clone https://github.com/VietVyIT/Mng-ch-m-c-ng.git
-cd Mng-ch-m-c-ng
 npm install
-
-# 2. Tạo database
-mysql -u root -p < database/schema.sql
-# Hoặc mở database/schema.sql trong MySQL Workbench → Execute
-
-# 3. Cấu hình môi trường
-cp server/.env.example server/.env
-# Mở server/.env → điền DB_PASSWORD và JWT_SECRET
-
-# 4. Chạy
-npm run dev
 ```
 
-- Frontend: http://localhost:5173
-- Backend: http://localhost:5000/api
-- Health check: http://localhost:5000/api/health
+### Bước 2: Tạo database
 
-## Triển khai Docker
+Mở **MySQL Workbench**, mở file `database/schema.sql` rồi bấm **Execute**.
 
-```bash
-cp .env.example .env    # Sửa JWT_SECRET trước khi chạy
-docker compose up -d --build
+Hoặc chạy bằng terminal:
+
+```powershell
+# Thêm MySQL vào PATH (chỉ cần lần đầu trong phiên terminal)
+$env:PATH += ";C:\Program Files\MySQL\MySQL Server 8.0\bin"
+
+# Chạy schema
+Get-Content database\schema.sql | mysql -u root -p
 ```
 
-Truy cập http://localhost:5000 — MySQL tự khởi tạo schema lần đầu.
+File này tạo database `attendance_system`, tất cả bảng cần thiết và tài khoản admin mẫu.
 
-```bash
-docker compose logs -f          # Xem logs
-docker compose down             # Dừng
-docker compose down -v          # Dừng + xoá database
-docker compose up -d --build    # Rebuild
+### Bước 3: Cấu hình môi trường
+
+```powershell
+Copy-Item server\.env.example server\.env
 ```
 
-## Deploy Vercel + Railway
-
-> Chỉ deploy frontend lên Vercel là chưa đủ. Cần backend Railway + MySQL.
-
-**Railway MySQL** — tạo service MySQL, chạy SQL theo thứ tự:
-
-```
-database/schema.sql
-database/migrations/003_workflows_shifts.sql
-database/migrations/004_punctuality_status.sql
-database/migrations/005_attendance_deletion_logs.sql
-database/migrations/006_notifications.sql
-database/migrations/007_user_profiles.sql
-database/migrations/008_imported_attendance.sql
-```
-
-**Railway Backend** — Root: `server`, Build: `npm install`, Start: `npm start`
+Mở file `server/.env` và sửa lại thông tin MySQL:
 
 ```env
-NODE_ENV=production
+NODE_ENV=development
 PORT=5000
-CLIENT_URL=https://<frontend-domain>
-DB_HOST=<railway-mysql-host>
+CLIENT_URL=http://localhost:5173
+
+DB_HOST=localhost
 DB_PORT=3306
 DB_NAME=attendance_system
-DB_USER=<railway-mysql-user>
-DB_PASSWORD=<railway-mysql-password>
-JWT_SECRET=<chuỗi-ngẫu-nhiên-tối-thiểu-32-ký-tự>
+DB_USER=root
+DB_PASSWORD=mật_khẩu_mysql_của_bạn
+
+JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
 FACE_MATCH_THRESHOLD=0.6
 ```
 
-Tạo JWT secret: `node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
+> Chỉ cần sửa `DB_PASSWORD` là chạy được. Các giá trị khác giữ mặc định.
 
-**Vercel Frontend** — Root: `client`, Build: `npm run build`, Output: `dist`
+### Bước 4: Chạy
 
-```env
-VITE_API_URL=https://<backend-domain>/api
+```bash
+npm run dev
 ```
 
-Đổi `VITE_API_URL` phải Redeploy vì biến `VITE_*` được nhúng lúc build.
+Mở trình duyệt:
+
+- **Frontend:** http://localhost:5173
+- **Backend API:** http://localhost:5000/api
+- **Health check:** http://localhost:5000/api/health/database — trả `success: true` là OK
+
+---
 
 ## Tài khoản thử nghiệm
 
@@ -104,11 +77,17 @@ VITE_API_URL=https://<backend-domain>/api
 | User 1 | `user1` | `user123` | Đã có 5 ngày công được duyệt |
 | User 2 | `user2` | `user123` | Tài khoản trống, thử check-in đầu tiên |
 
-**Test nhanh:** Đăng nhập `user2` → check-in → đăng nhập `admin` → duyệt → đăng nhập lại `user2` xem kết quả.
+**Test nhanh:**
 
-> Tài khoản mẫu chỉ dùng cho development, không dùng production.
+1. Đăng nhập `user2` / `user123` → check-in bằng khuôn mặt
+2. Đăng nhập `admin` / `admin123` → duyệt yêu cầu
+3. Đăng nhập lại `user2` → xem kết quả
 
-## Khung giờ ca làm
+> Tài khoản mẫu chỉ dùng cho development.
+
+---
+
+## Ca làm việc
 
 | Ca | Thời gian | Ghi chú |
 |----|-----------|---------|
@@ -116,56 +95,57 @@ VITE_API_URL=https://<backend-domain>/api
 | Chiều | 13:30 – 17:30 | Mặc định bật |
 | Tối | 17:30 – 20:00 | Admin bật/tắt theo ngày |
 
+---
+
 ## Import Excel
 
 Admin → Dashboard → **Nhập dữ liệu Excel** → tải file `.xlsx` / `.xls`.
 
-Yêu cầu file: dòng ngày `D/M` hoặc `D/M/YYYY`, dòng dưới ghi ca (`Sáng`, `Chiều`, `Tối`), cột `Họ & Tên` + `MSSV` + `Total`, ô `x`/`X` = đã đi làm.
+File cần có: dòng ngày `D/M` hoặc `D/M/YYYY`, dòng dưới ghi ca (`Sáng`, `Chiều`, `Tối`), cột `Họ & Tên` + `MSSV` + `Total`, ô `x`/`X` = đã đi làm.
 
 Thành viên chưa có tài khoản sẽ được tạo tự động (mật khẩu tạm `user123@`, bắt đổi lần đầu).
 
+---
+
 ## Nạp danh sách thành viên
+
+File `server/seed/members.json` nằm local (đã gitignore):
 
 ```bash
 npm run seed:members --workspace server
 ```
 
-File `server/seed/members.json` nằm local, đã thêm `.gitignore`. Mật khẩu lưu bcrypt hash, đánh dấu đổi mật khẩu lần đầu.
-
-## Bảo mật
-
-- Mật khẩu: bcrypt hash (cost 12)
-- Xác thực: JWT qua header `Authorization: Bearer <token>`
-- HTTP headers: Helmet.js, tắt `x-powered-by`
-- Rate limit: 10 lần đăng nhập sai / 5 phút / IP
-- SQL: parameter binding (prepared statements)
-- Body: JSON giới hạn 10MB
-- Không commit `.env`, `members.json` lên git
+---
 
 ## Cấu trúc thư mục
 
 ```
-├── Dockerfile                 # Multi-stage Docker build
-├── docker-compose.yml         # MySQL + App
-├── .env.example               # Biến môi trường Docker
+├── Dockerfile
+├── docker-compose.yml
 ├── package.json               # Root workspace
 ├── client/                    # React + Vite
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── main.jsx
-│   │   └── styles.css
-│   ├── vite.config.js
-│   └── vercel.json
+│   └── src/
+│       ├── App.jsx
+│       ├── main.jsx
+│       └── styles.css
 ├── server/                    # Express API
-│   ├── src/
-│   │   ├── server.js
-│   │   ├── app.js
-│   │   ├── config/
-│   │   ├── routes/
-│   │   ├── middlewares/
-│   │   └── utils/
-│   └── seed/
+│   └── src/
+│       ├── server.js          # Entry point
+│       ├── app.js             # Express config
+│       ├── config/            # env.js, database.js
+│       ├── routes/            # API routes
+│       ├── middlewares/
+│       └── utils/
 └── database/
     ├── schema.sql
     └── migrations/
 ```
+
+---
+
+## Lưu ý bảo mật
+
+- Không commit `server/.env` hoặc `server/seed/members.json`
+- Mật khẩu lưu bcrypt hash, không plaintext
+- JWT qua header `Authorization: Bearer <token>`
+- Rate limit: 10 lần đăng nhập sai / 5 phút / IP
