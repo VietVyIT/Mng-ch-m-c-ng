@@ -5,3 +5,6 @@ dist/
 !.env.example
 uploads/
 server/seed/members.json
+
+# Docker
+docker-compose.override.yml

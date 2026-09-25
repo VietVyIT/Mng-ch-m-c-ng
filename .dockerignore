@@ -1,0 +1,32 @@
+# Dependencies & caches
+node_modules/
+.npm
+
+# Build output (rebuilt in Docker)
+client/dist/
+
+# Environment files (secrets!)
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive seed data
+server/seed/members.json
+
+# Docker files (no recursion)
+Dockerfile
+docker-compose.yml
