@@ -27,7 +27,16 @@ import {
   X,
 } from 'lucide-react';
 
-const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const configuredApiUrl = import.meta.env.VITE_API_URL;
+const apiUrl = configuredApiUrl || 'http://localhost:5000/api';
+
+if (import.meta.env.PROD && !configuredApiUrl) {
+  console.error('Thiếu VITE_API_URL cho môi trường production.');
+}
+
+function isSecureCameraContext() {
+  return window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+}
 
 const adminNavItems = [
   { label: 'Dashboard', icon: LayoutDashboard },
@@ -44,7 +53,7 @@ const userNavItems = [
 
 // Dữ liệu thật sẽ được nạp từ API dashboard. Null nghĩa là chưa có dữ liệu.
 const attendanceData = null;
-const PHOTO_MAX_BYTES = 30 * 1024;
+const PHOTO_MAX_BYTES = 15 * 1024;
 
 const IMPORT_SHIFTS = {
   Sáng: { code: 'MORNING', start: '07:30:00', end: '12:00:00' },
@@ -113,24 +122,24 @@ function parseAttendanceWorkbook(buffer) {
 
 async function compressWebcamFrame(video) {
   const canvas = document.createElement('canvas');
-  const maxWidth = 480;
+  const maxWidth = 320;
   const scale = Math.min(1, maxWidth / video.videoWidth);
   canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
   canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  let quality = 0.42;
+  let quality = 0.35;
   let dataUrl = canvas.toDataURL('image/jpeg', quality);
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const bytes = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
     if (bytes <= PHOTO_MAX_BYTES) return dataUrl;
     if (bytes > PHOTO_MAX_BYTES) {
-      quality = Math.max(0.15, quality - 0.05);
+      quality = Math.max(0.08, quality - 0.05);
     }
     dataUrl = canvas.toDataURL('image/jpeg', quality);
   }
   const finalBytes = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
-  if (finalBytes > PHOTO_MAX_BYTES) throw new Error('Không thể nén ảnh xuống dưới 30KB. Vui lòng thử lại.');
+  if (finalBytes > PHOTO_MAX_BYTES) throw new Error('Không thể nén ảnh xuống dưới 15KB. Vui lòng thử lại.');
   return dataUrl;
 }
 
@@ -403,6 +412,7 @@ function UserProfile({ user, onUserUpdated }) {
   const [profile, setProfile] = useState({ fullName: user.fullName || '', studentCode: user.studentCode || '', phone: user.phone || '', address: user.address || '', hometownProvinceCode: user.hometownProvinceCode || '', hometownProvinceName: user.hometownProvinceName || '' });
   const [provinces, setProvinces] = useState([]);
   const [message, setMessage] = useState('');
+  const [photoPreview, setPhotoPreview] = useState(null);
   const [error, setError] = useState('');
   const [password, setPassword] = useState({ currentPassword: '', newPassword: '', confirmPassword: '' });
   const [passwordMessage, setPasswordMessage] = useState('');
@@ -583,7 +593,7 @@ function AttendanceHistory({ user }) {
     }
   }
 
-  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử và ảnh chấm công của chính mình.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td><td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button>{user.role === 'ADMIN' && <button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button>}</td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 7 : 6} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
+  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử và ảnh chấm công của chính mình.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 7 : 6} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
 }
 
 function AdminDashboard({ user }) {
@@ -700,6 +710,7 @@ function StudentManagement() {
   const [confirm, setConfirm] = useState(null);
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
+  const [photoPreview, setPhotoPreview] = useState(null);
   const token = localStorage.getItem('attendance_token');
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -714,6 +725,19 @@ function StudentManagement() {
     const response = await fetch(`${apiUrl}/admin/imported-attendance/users/${member.id}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await response.json();
     if (response.ok && body.success) setSelected(body.data);
+  }
+  async function openMemberPhoto(record, type) {
+    const prefix = type === 'check-in' ? 'check_in' : 'check_out';
+    const availableKey = `${prefix}_photo_available`;
+    const expiredKey = `${prefix}_photo_expired`;
+    if (record.source !== 'Camera' || record[availableKey] === 0 || record[expiredKey]) return;
+    const response = await fetch(`${apiUrl}/admin/attendance/${record.id}/image/${type}`, { headers: { Authorization: 'Bearer ' + token } });
+    if (!response.ok) {
+      setMessage('Ảnh đã hết hạn hoặc không tồn tại.');
+      return;
+    }
+    const label = (selected?.user.full_name || '') + ' · ' + (type === 'check-in' ? 'Check-in' : 'Check-out');
+    setPhotoPreview({ url: URL.createObjectURL(await response.blob()), label });
   }
   async function executeDelete() {
     const target = confirm;
@@ -771,9 +795,10 @@ function StudentManagement() {
     <div className="panel-heading"><div><h3>Quản lý & Tra cứu ngày công</h3><p>Tìm kiếm thành viên và điều chỉnh dữ liệu import</p></div>{selectedIds.length > 0 && <button className="danger-button" onClick={() => setConfirm({ bulk: true })}><Trash2 size={15} /> Xóa công đã chọn ({selectedIds.length})</button>}</div>
     <div className="attendance-search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập họ tên nhân viên..." /></div>
     <div className="select-all-row"><label><input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} /> Chọn tất cả sinh viên đang hiển thị</label><small>{selectedIds.length} đã chọn</small></div>
-    <div className="management-layout"><div className="member-results">{members.map((member) => <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} /><button type="button" className="member-result-content" onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button></div>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="user-info-grid"><div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div><div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div><div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div><div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div><div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div><div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div></div><div className="imported-record-list">{selected.records.map((record) => <div className="imported-record" key={`${record.source}-${record.id}`}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span><small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small><button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!selected.records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div>}</div>
+    <div className="management-layout"><div className="member-results">{members.map((member) => <div key={member.id} className={`member-result ${selected?.user.id === member.id ? 'active' : ''}`}><input type="checkbox" checked={selectedIds.includes(member.id)} onChange={() => toggleMember(member.id)} aria-label={`Chọn ${member.full_name}`} /><button type="button" className="member-result-content" onClick={() => selectMember(member)}><strong>{member.full_name}</strong><small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small></button></div>)}</div>{selected && <div className="member-detail"><div className="member-detail-heading"><div><h4>{selected.user.full_name}</h4><p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p></div><button className="danger-button" onClick={() => setConfirm({ all: true })}><Trash2 size={15} /> Xóa toàn bộ công</button></div><div className="user-info-grid"><div><span>Tên đăng nhập</span><strong>{selected.user.username || '—'}</strong></div><div><span>Số điện thoại</span><strong>{selected.user.phone || 'Chưa cập nhật'}</strong></div><div><span>Địa chỉ</span><strong>{selected.user.address || 'Chưa cập nhật'}</strong></div><div><span>Quê quán</span><strong>{selected.user.hometown_province_name || 'Chưa cập nhật'}</strong></div><div><span>Khuôn mặt</span><strong>{selected.user.face_registered ? 'Đã đăng ký' : 'Chưa đăng ký'}</strong></div><div><span>Mật khẩu</span><strong>{selected.user.must_change_password ? 'Đang dùng mật khẩu tạm' : 'Đã đổi mật khẩu'}</strong></div></div><div className="imported-record-list">{selected.records.map((record) => <div className="imported-record" key={`${record.source}-${record.id}`}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>    <small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>{record.source === 'Camera' && <span className="record-photo-actions"><button type="button" disabled={!record.check_in_photo_available || record.check_in_photo_expired} onClick={() => openMemberPhoto(record, 'check-in')}>Ảnh vào{record.check_in_photo_expired ? ' · Hết hạn' : ''}</button><button type="button" disabled={!record.check_out_photo_available || record.check_out_photo_expired} onClick={() => openMemberPhoto(record, 'check-out')}>Ảnh ra{record.check_out_photo_expired ? ' · Hết hạn' : ''}</button></span>}<button className="icon-danger" onClick={() => setConfirm({ record })} aria-label="Xóa ca"><Trash2 size={15} /></button></div>)}{!selected.records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div>}</div>
     {message && <div className="approval-note">{message}</div>}
     {confirm && <div className="confirm-inline"><strong>Xác nhận xóa {confirm.bulk ? `toàn bộ công của ${selectedIds.length} sinh viên` : confirm.all ? 'toàn bộ công' : 'ca này'}?</strong><input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" /><button className="danger-button" onClick={confirm.bulk ? executeBulkDelete : executeDelete}>Xác nhận xóa</button><button className="secondary-button" onClick={() => { setConfirm(null); setReason(''); }}>Hủy</button></div>}
+    {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(photoPreview.url); setPhotoPreview(null); }}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(photoPreview.url); setPhotoPreview(null); }}><X size={18} /></button><span className="section-label">{photoPreview.label}</span><img src={photoPreview.url} alt={photoPreview.label} /></div></motion.div>}
   </section></div>;
 }
 
@@ -868,6 +893,11 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   useEffect(() => {
     let cancelled = false;
     async function startCamera() {
+      if (!isSecureCameraContext()) {
+        setCameraError('Camera chỉ hoạt động trên HTTPS trong môi trường production. Vui lòng mở ứng dụng bằng đường dẫn HTTPS.');
+        setCameraState('error');
+        return;
+      }
       if (!navigator.mediaDevices?.getUserMedia) {
         setCameraState('error');
         setCameraError('Trình duyệt không hỗ trợ camera. Hãy dùng Chrome, Edge hoặc Safari trên HTTPS/localhost.');

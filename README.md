@@ -102,5 +102,32 @@ Hệ thống hiển thị bản xem trước trước khi lưu. Thành viên đ�
 
 Nếu thành viên chưa tồn tại, hệ thống sẽ tự tạo tài khoản USER với username là họ tên trong Excel và mật khẩu tạm thời `user123@`; tài khoản được đánh dấu đổi mật khẩu ở lần đăng nhập đầu tiên. Cột `Total` luôn được lưu nguyên giá trị làm tổng ngày công, không thay thế bằng số lượng dấu `x`.
 
+## Deploy production trên Vercel/Netlify
+
+Frontend dùng Root Directory `client`, build command `npm run build`, output
+directory `dist`, và biến `VITE_API_URL=https://<api-domain>/api`. File
+[client/vercel.json](client/vercel.json) xử lý SPA rewrite cho Vercel; file
+[client/public/_redirects](client/public/_redirects) xử lý fallback route cho Netlify.
+
+Backend Express cần chạy trên dịch vụ Node.js có MySQL. Production environment:
+
+```text
+NODE_ENV=production
+PORT=5000
+CLIENT_URL=https://<frontend-domain>
+DB_HOST=<mysql-host>
+DB_PORT=3306
+DB_NAME=attendance_system
+DB_USER=<mysql-user>
+DB_PASSWORD=<mysql-password>
+JWT_SECRET=<random-secret-at-least-32-characters>
+FACE_MATCH_THRESHOLD=0.6
+```
+
+Backend sẽ từ chối `CLIENT_URL` không dùng HTTPS hoặc `JWT_SECRET` mặc định/ngắn
+khi `NODE_ENV=production`. Webcam API chỉ hoạt động trên HTTPS (hoặc localhost),
+vì vậy frontend và API production đều phải dùng HTTPS. Chạy schema/migration
+trên database production trước khi sử dụng.
+
 Các mục Chấm công, Lịch sử và Hồ sơ yêu cầu đăng nhập. JWT được gửi qua header
 `Authorization: Bearer <token>` và backend kiểm tra role trước khi cho phép truy cập.

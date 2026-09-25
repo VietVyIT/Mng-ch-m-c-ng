@@ -152,8 +152,17 @@ router.get('/imported-attendance/users/:userId', async (request, response, next)
     );
     const [cameraRecords] = await pool.execute(
       `SELECT a.id, a.attendance_date, a.shift_code, a.shift_name, a.check_in, a.check_out,
-              a.total_hours, a.status
-       FROM attendance a WHERE a.user_id = ? AND a.status = 'APPROVED'
+              a.total_hours, a.status,
+              ci.captured_at AS check_in_captured_at,
+              ci.photo_expired AS check_in_photo_expired,
+              (ci.image IS NOT NULL) AS check_in_photo_available,
+              co.captured_at AS check_out_captured_at,
+              co.photo_expired AS check_out_photo_expired,
+              (co.image IS NOT NULL) AS check_out_photo_available
+       FROM attendance a
+       LEFT JOIN attendance_events ci ON ci.attendance_id = a.id AND ci.event_type = 'CHECK_IN'
+       LEFT JOIN attendance_events co ON co.attendance_id = a.id AND co.event_type = 'CHECK_OUT'
+       WHERE a.user_id = ? AND a.status = 'APPROVED'
        ORDER BY a.attendance_date DESC, a.shift_start`,
       [request.params.userId],
     );
@@ -359,6 +368,10 @@ router.get('/approvals', async (_request, response, next) => {
 
 router.get('/approvals/:eventId/image', async (request, response, next) => {
   try {
+    await pool.execute(
+      `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
+       WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
+    );
     const [rows] = await pool.execute(
       'SELECT image, image_mime FROM attendance_events WHERE id = ? LIMIT 1',
       [request.params.eventId],
@@ -409,6 +422,10 @@ router.get('/attendance', async (_request, response, next) => {
 
 router.get('/attendance/:attendanceId/image/:type', async (request, response, next) => {
   try {
+    await pool.execute(
+      `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
+       WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
+    );
     const eventType = request.params.type === 'check-in' ? 'CHECK_IN' : request.params.type === 'check-out' ? 'CHECK_OUT' : null;
     if (!eventType) return response.status(400).json({ success: false, message: 'Loại ảnh không hợp lệ.' });
     const [rows] = await pool.execute(

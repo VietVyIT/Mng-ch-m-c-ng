@@ -9,6 +9,7 @@ function required(name) {
 }
 
 export const env = {
+  nodeEnv: process.env.NODE_ENV || 'development',
   port: Number(process.env.PORT || 5000),
   clientUrl: required('CLIENT_URL'),
   jwtSecret: required('JWT_SECRET'),
@@ -21,3 +22,12 @@ export const env = {
     password: process.env.DB_PASSWORD || '',
   },
 };
+
+if (env.nodeEnv === 'production') {
+  if (!env.clientUrl.startsWith('https://')) {
+    throw new Error('CLIENT_URL production phải dùng HTTPS.');
+  }
+  if (env.jwtSecret.length < 32 || env.jwtSecret === 'change-this-secret-in-development') {
+    throw new Error('JWT_SECRET production phải là chuỗi ngẫu nhiên dài ít nhất 32 ký tự.');
+  }
+}
