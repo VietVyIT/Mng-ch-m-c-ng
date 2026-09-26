@@ -682,7 +682,9 @@ async function serveApprovalImage(request, response, next) {
       [eventId],
     );
     if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn.' });
-    return response.type(rows[0].image_mime || 'image/jpeg').send(rows[0].image);
+    const base64Data = rows[0].image.toString('base64');
+    const mime = rows[0].image_mime || 'image/jpeg';
+    return response.json({ success: true, data: `data:${mime};base64,${base64Data}` });
   } catch (error) {
     return next(error);
   }
@@ -743,7 +745,9 @@ router.get('/attendance/:attendanceId/image/:type', async (request, response, ne
       [request.params.attendanceId, eventType],
     );
     if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
-    return response.type(rows[0].image_mime || 'image/jpeg').send(rows[0].image);
+    const base64Data = rows[0].image.toString('base64');
+    const mime = rows[0].image_mime || 'image/jpeg';
+    return response.json({ success: true, data: `data:${mime};base64,${base64Data}` });
   } catch (error) {
     return next(error);
   }

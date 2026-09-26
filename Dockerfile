@@ -1,33 +1,41 @@
-# STAGE 1: Client Builder
-FROM node:18-alpine AS client-builder
+﻿# ==========================================
+# STAGE 1: Build Frontend (React + Vite)
+# ==========================================
+FROM node:20-alpine AS builder
 
+WORKDIR /app
+
+# Cài đặt toàn bộ dependencies (Sử dụng package.json của gốc, client, server)
+COPY package*.json ./
+COPY client/package*.json client/
+COPY server/package*.json server/
+RUN npm ci
+
+# Copy source code client và build
+COPY client/ client/
 WORKDIR /app/client
-
-# Copy cấu hình client và cài đặt dependencies
-COPY client/package*.json ./
-RUN npm install
-
-# Copy toàn bộ mã nguồn client và build ra thư mục tĩnh (dist)
-COPY client/ ./
 RUN npm run build
 
-# STAGE 2: Production Server
-FROM node:18-alpine AS production-server
+# ==========================================
+# STAGE 2: Setup Express Backend & Serve Static
+# ==========================================
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Chỉ cài đặt production dependencies cho server
+COPY package*.json ./
+COPY server/package*.json server/
+RUN npm ci --omit=dev
+
+# Copy source code của server
+COPY server/ server/
+
+# Copy thư mục build của client từ Stage 1 sang đúng vị trí mà Express mong đợi
+COPY --from=builder /app/client/dist /app/client/dist
 
 WORKDIR /app/server
+EXPOSE 5000
 
-# Copy cấu hình server và cài đặt dependencies (chỉ production)
-COPY server/package*.json ./
-RUN npm install --omit=dev
-
-# Copy toàn bộ mã nguồn server
-COPY server/ ./
-
-# Copy thư mục tĩnh đã build từ Stage 1 sang cấu trúc mong đợi của app.js
-COPY --from=client-builder /app/client/dist /app/client/dist
-
-# Expose port (Nginx sẽ proxy vào port này)
-EXPOSE 3000
-
-# Khởi chạy server
+# Khởi chạy Backend
 CMD ["node", "src/server.js"]

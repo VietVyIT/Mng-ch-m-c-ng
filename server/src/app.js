@@ -19,12 +19,25 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 app.disable('x-powered-by');
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:", "https://placehold.co"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      connectSrc: ["'self'", "http://localhost:*", "ws://localhost:*", "http://*:*", "ws://*:*"],
+    },
+  },
+}));
 app.use(cors({ 
   origin: env.clientUrl ? env.clientUrl.trim() : true,
   credentials: true 
 }));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use('/models', express.static(path.join(__dirname, '../public/models')));
 app.use('/api/auth/login', rateLimit({
   windowMs: 5 * 60 * 1000,
   limit: 10,
@@ -51,3 +64,4 @@ if (env.nodeEnv === 'production') {
 app.use(errorMiddleware);
 
 export default app;
+

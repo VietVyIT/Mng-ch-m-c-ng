@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "attendance-system",
   "private": true,
   "version": "1.0.0",
@@ -11,9 +11,13 @@
     "build": "npm run build --workspace client",
     "start": "npm run start --workspace server",
     "docker:up": "docker compose --env-file .env.docker up -d --build",
-    "docker:down": "docker compose --env-file .env.docker down"
+    "docker:down": "docker compose --env-file .env.docker down",
+    "db:dump": "mysqldump -u root -pPhanvietvy107@ attendance_system > database/seed.sql"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
+  },
+  "dependencies": {
+    "mysql2": "^3.24.4"
   }
 }

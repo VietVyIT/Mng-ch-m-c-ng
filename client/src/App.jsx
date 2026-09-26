@@ -44,6 +44,33 @@ if (import.meta.env.PROD && !configuredApiUrl) {
   console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
 }
 
+function useRealtimeShift(eveningEnabled) {
+  const [currentShift, setCurrentShift] = useState(null);
+
+  useEffect(() => {
+    function updateShift() {
+      const now = new Date();
+      const totalMinutes = now.getHours() * 60 + now.getMinutes();
+      
+      if (totalMinutes >= 360 && totalMinutes <= 720) {
+        setCurrentShift({ code: 'MORNING', name: 'CA SÁNG', start: '07:30:00', end: '12:00:00' });
+      } else if (totalMinutes > 720 && totalMinutes <= 1050) {
+        setCurrentShift({ code: 'AFTERNOON', name: 'CA CHIỀU', start: '13:30:00', end: '17:30:00' });
+      } else if (totalMinutes > 1050 && totalMinutes <= 1320 && eveningEnabled !== false) {
+        setCurrentShift({ code: 'EVENING', name: 'CA TỐI', start: '18:00:00', end: '20:00:00' });
+      } else {
+        setCurrentShift(null);
+      }
+    }
+    
+    updateShift();
+    const interval = setInterval(updateShift, 30000);
+    return () => clearInterval(interval);
+  }, [eveningEnabled]);
+
+  return currentShift;
+}
+
 function isSecureCameraContext() {
   return window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 }
@@ -465,6 +492,7 @@ function PageContent({ page, user, onUserUpdated }) {
 
 function AdminAttendanceWorkArea({ user }) {
   const [shiftData, setShiftData] = useState(null);
+  const realtimeShift = useRealtimeShift(shiftData?.eveningEnabled);
   const [today, setToday] = useState(null);
   const [faceModal, setFaceModal] = useState(false);
   const [checkedIn, setCheckedIn] = useState(false);
@@ -545,7 +573,7 @@ function AdminAttendanceWorkArea({ user }) {
     <div className="attendance-work-grid">
       <div className="content-panel shift-status-card">
         <div className="panel-heading"><div><h3>Ca làm việc & trạng thái</h3><p>Ca tối chỉ hiển thị khi Admin bật.</p></div></div>
-        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === currentShiftCode ? 'active' : ''}`}><div><strong>{shift.name}</strong><small>{shift.start.slice(0, 5)} — {shift.end.slice(0, 5)}</small></div>{shift.code === currentShiftCode && <span>ĐANG DIỄN RA</span>}</div>)}</div>
+        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === realtimeShift?.code ? 'active' : ''}`}><div><strong>{shift.name}</strong><small>{shift.start.slice(0, 5)} — {shift.end.slice(0, 5)}</small></div>{shift.code === realtimeShift?.code && <span>ĐANG DIỄN RA</span>}</div>)}</div>
         <div className="attendance-status-card">
           <div><span>Trạng thái</span><strong>{statusLabel}</strong></div>
           <div className="attendance-time-row">
@@ -561,7 +589,24 @@ function AdminAttendanceWorkArea({ user }) {
       <div className="content-panel face-action-card">
         <div className="panel-heading"><div><h3>Face ID Action</h3><p>Chụp ảnh nén để xác thực chấm công.</p></div><Camera size={20} /></div>
         <div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>
-        {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : <button className="checkout-button face-action" disabled={!shiftData?.current} onClick={() => setFaceModal(true)}><Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} /></button>}
+        {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
+<button className="checkout-button face-action" disabled={!realtimeShift} onClick={() => {
+  if (checkedIn && realtimeShift?.end) {
+    const now = new Date();
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    const [endHours, endMinutes] = realtimeShift.end.split(':').map(Number);
+    const currentTime = currentHours * 60 + currentMinutes;
+    const endTime = endHours * 60 + endMinutes;
+    if (currentTime < endTime) {
+      alert(`Chưa đến giờ kết thúc ca làm việc (${realtimeShift.end.slice(0, 5)}). Bạn không thể check-out trước giờ!`);
+      return;
+    }
+  }
+  setFaceModal(true);
+}}>
+<Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
+</button>}
         <small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small>
       </div>
     </div>
@@ -645,6 +690,7 @@ function UserPortal({ user }) {
   const [checkedIn, setCheckedIn] = useState(false);
   const [today, setToday] = useState(null);
   const [shift, setShift] = useState(null);
+  const realtimeShift = useRealtimeShift(shift?.eveningEnabled);
   const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
 
@@ -722,7 +768,25 @@ function UserPortal({ user }) {
 
     <span className="overview-label">TỔNG QUAN CÁ NHÂN</span>
     <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
-    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{shift?.current?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{shift?.current?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{shift?.current ? `${shift.current.start.slice(0, 5)} — ${shift.current.end.slice(0, 5)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div><button className="checkout-button face-action" disabled={!checkedIn && !(shift?.shifts?.length)} onClick={() => setFaceModal(true)}><Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} /></button></div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
+    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${realtimeShift.start.slice(0, 5)} — ${realtimeShift.end.slice(0, 5)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
+<button className="checkout-button face-action" disabled={!checkedIn && !realtimeShift} onClick={() => {
+  if (checkedIn && realtimeShift?.end) {
+    const now = new Date();
+    const currentHours = now.getHours();
+    const currentMinutes = now.getMinutes();
+    const [endHours, endMinutes] = realtimeShift.end.split(':').map(Number);
+    const currentTime = currentHours * 60 + currentMinutes;
+    const endTime = endHours * 60 + endMinutes;
+    if (currentTime < endTime) {
+      alert(`Chưa đến giờ kết thúc ca làm việc (${realtimeShift.end.slice(0, 5)}). Bạn không thể check-out trước giờ!`);
+      return;
+    }
+  }
+  setFaceModal(true);
+}}>
+<Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+</button>
+</div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
   </div>;
 }
@@ -753,7 +817,8 @@ function AttendanceHistory({ user }) {
       : `${apiUrl}/attendance/${record.id}/image/${type}`;
     const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) return;
-    setPreview({ url: URL.createObjectURL(await response.blob()), label: `${record.full_name || user.fullName || user.username} · ${type === 'check-in' ? 'Check-in' : 'Check-out'}` });
+    const result = await response.json();
+    setPreview({ url: result.data, label: `${record.full_name || user.fullName || user.username} · ${type === 'check-in' ? 'Check-in' : 'Check-out'}` });
   }
 
   async function deleteAttendance(record) {
@@ -781,7 +846,7 @@ function AttendanceHistory({ user }) {
     }
   }
 
-  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử và ảnh chấm công của chính mình.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 7 : 6} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(preview.url); setPreview(null); }}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
+  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử và ảnh chấm công của chính mình.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 7 : 6} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPreview(null)}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
 }
 
 function AdminDashboard({ user }) {
@@ -790,6 +855,7 @@ function AdminDashboard({ user }) {
   const [latestAttendance, setLatestAttendance] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [eveningEnabled, setEveningEnabled] = useState(true);
+  const realtimeShift = useRealtimeShift(eveningEnabled);
   const [todayShift, setTodayShift] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [showAllModal, setShowAllModal] = useState(false);
@@ -950,8 +1016,8 @@ function AdminDashboard({ user }) {
       alert('Không tìm thấy ảnh đối soát hoặc ảnh đã hết hạn lưu trữ.');
       return;
     }
-    const blob = await response.blob();
-    setPhotoPreview(URL.createObjectURL(blob));
+    const result = await response.json();
+    setPhotoPreview(result.data);
   }
 
   async function handleFaceSuccess(embedding, imageData) {
@@ -1003,7 +1069,62 @@ function AdminDashboard({ user }) {
         {hasAttendanceData
           ? <AttendanceChart data={dashboardStats.trend} selectedDate={selectedDate} onDateSelect={handleChartDateSelect} />
           : <EmptyAttendanceState />}
-      </div><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>Thông tin ca làm việc</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{todayShift?.current?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span><strong>{todayShift?.current ? `${todayShift.current.start.slice(0, 5)} — ${todayShift.current.end.slice(0, 5)}` : '07:30 — 12:00'}</strong></div><div className="status-line"><span>Ca khả dụng</span><strong>{todayShift?.shifts?.map((shift) => shift.name).join(' · ') || 'Ca sáng · Ca chiều'}</strong></div><div className="status-line"><span>Check-in</span><strong className="empty-value">{latestAttendance?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong className="empty-value">{latestAttendance?.check_out || '—:—'}</strong></div><div className="face-preview"><div className="face-radar"><Camera size={24} /><i /></div><span>{checkedIn ? 'Đã check-in, có thể check-out' : 'Camera cần xác thực khuôn mặt'}</span></div><button className="checkout-button face-action" disabled={!checkedIn && !(todayShift?.shifts?.length)} onClick={() => setFaceModal(true)}>{checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} /></button></div></div></section>
+      </div>
+      <div className="content-panel status-panel">
+          <div className="panel-heading">
+            <div>
+              <h3>Trạng thái hôm nay</h3>
+              <p>Thông định ca làm việc</p>
+            </div>
+            <span className="live-dot">LIVE</span>
+          </div>
+          <div className="today-status">
+            <div className="shift-time">
+              <span>{realtimeShift?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span>
+              <strong>{realtimeShift ? `${realtimeShift.start.slice(0, 5)} — ${realtimeShift.end.slice(0, 5)}` : '07:30 — 12:00'}</strong>
+            </div>
+            <div className="status-line">
+              <span>Ca khả dụng</span>
+              <strong>{todayShift?.shifts?.map((shift) => shift.name).join(' · ') || 'Ca sáng · Ca chiều'}</strong>
+            </div>
+            <div className="status-line">
+              <span>Check-in</span>
+              <strong className="empty-value">{latestAttendance?.check_in || '—:—'}</strong>
+            </div>
+            <div className="status-line">
+              <span>Check-out</span>
+              <strong className="empty-value">{latestAttendance?.check_out || '—:—'}</strong>
+            </div>
+            <div className="face-preview">
+              <div className="face-radar"><Camera size={24} /><i /></div>
+              <span>{checkedIn ? 'Đã check-in, có thể check-out' : 'Camera cần xác thực khuôn mặt'}</span>
+            </div>
+            <button
+              className="checkout-button face-action"
+              disabled={!checkedIn && !realtimeShift}
+              onClick={() => {
+                if (checkedIn && realtimeShift?.end) {
+                  const now = new Date();
+                  const currentHours = now.getHours();
+                  const currentMinutes = now.getMinutes();
+                  const [endHours, endMinutes] = realtimeShift.end.split(':').map(Number);
+                  
+                  const currentTime = currentHours * 60 + currentMinutes;
+                  const endTime = endHours * 60 + endMinutes;
+                  
+                  if (currentTime < endTime) {
+                    alert(`Chưa đến giờ kết thúc ca làm việc (${realtimeShift.end.slice(0, 5)}). Bạn không thể check-out trước giờ!`);
+                    return;
+                  }
+                }
+                setFaceModal(true);
+              }}
+            >
+              {checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+            </button>
+          </div>
+        </div>
+      </section>
     <section className="approval-panel content-panel">
       <div className="panel-heading">
         <div>
@@ -1052,7 +1173,7 @@ function AdminDashboard({ user }) {
       )}
     </section>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
-    {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(photoPreview); setPhotoPreview(null); }}><motion.div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(photoPreview); setPhotoPreview(null); }}><X size={18} /></button><img src={photoPreview} alt="Ảnh đối soát khuôn mặt" /></motion.div></motion.div>}
+    {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPhotoPreview(null)}><motion.div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPhotoPreview(null)}><X size={18} /></button><img src={photoPreview} alt="Ảnh đối soát khuôn mặt" onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></motion.div></motion.div>}
     <AnimatePresence>
       {showAllModal && (
         <AllRequestsModal
@@ -1130,7 +1251,8 @@ function StudentManagement() {
       return;
     }
     const label = (selected?.user.full_name || '') + ' · ' + (type === 'check-in' ? 'Check-in' : 'Check-out');
-    setPhotoPreview({ url: URL.createObjectURL(await response.blob()), label });
+    const result = await response.json();
+    setPhotoPreview({ url: result.data, label });
   }
 
   async function executeDelete() {
@@ -1424,7 +1546,7 @@ function StudentManagement() {
         </div>
       </div>
     )}
-    {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => { URL.revokeObjectURL(photoPreview.url); setPhotoPreview(null); }}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { URL.revokeObjectURL(photoPreview.url); setPhotoPreview(null); }}><X size={18} /></button><span className="section-label">{photoPreview.label}</span><img src={photoPreview.url} alt={photoPreview.label} /></div></motion.div>}
+    {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPhotoPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPhotoPreview(null)}><X size={18} /></button><span className="section-label">{photoPreview.label}</span><img src={photoPreview.url} alt={photoPreview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}
   </section></div>;
 }
 
@@ -1964,11 +2086,13 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const [cameraState, setCameraState] = useState('starting');
   const [cameraError, setCameraError] = useState('');
   const [modelReady, setModelReady] = useState(false);
+  const [modelError, setModelError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    async function startCamera() {
+
+    async function startVideo() {
       if (!isSecureCameraContext()) {
         setCameraError('Camera chỉ hoạt động trên HTTPS trong môi trường production. Vui lòng mở ứng dụng bằng đường dẫn HTTPS.');
         setCameraState('error');
@@ -1980,14 +2104,6 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
         return;
       }
       try {
-        const modelUrl = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/';
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl),
-          faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl),
-          faceapi.nets.faceRecognitionNet.loadFromUri(modelUrl),
-        ]);
-        if (cancelled) return;
-        setModelReady(true);
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
           video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -2004,10 +2120,40 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
         setCameraState('error');
         setCameraError(error.name === 'NotAllowedError'
           ? 'Bạn đã từ chối quyền camera. Hãy cho phép camera trong thanh địa chỉ rồi thử lại.'
-          : error.message || 'Không thể mở camera. Hãy kiểm tra camera không bị ứng dụng khác sử dụng.');
+          : error.message || 'Không thể mở camera. Hãy kiểm tra quyền truy cập.');
       }
     }
-    startCamera();
+
+    async function loadModels() {
+      const LOCAL_URL = apiUrl.replace('/api', '') + '/models';
+      const CDN_FALLBACK_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
+
+      try {
+        await Promise.all([
+          faceapi.nets.tinyFaceDetector.loadFromUri(LOCAL_URL),
+          faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_URL),
+          faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_URL),
+        ]);
+        if (!cancelled) setModelReady(true);
+      } catch (localErr) {
+        console.warn("Model local bị lỗi, đang chuyển sang tải từ CDN dự phòng...", localErr);
+        try {
+          await Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(CDN_FALLBACK_URL),
+            faceapi.nets.faceLandmark68Net.loadFromUri(CDN_FALLBACK_URL),
+            faceapi.nets.faceRecognitionNet.loadFromUri(CDN_FALLBACK_URL),
+          ]);
+          if (!cancelled) setModelReady(true);
+        } catch (cdnErr) {
+          console.error("Không thể nạp model AI:", cdnErr);
+          if (!cancelled) setModelError("Không thể nạp model AI. Vui lòng kiểm tra mạng!");
+        }
+      }
+    }
+
+    startVideo();
+    loadModels();
+
     return () => {
       cancelled = true;
       streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -2016,16 +2162,21 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   }, []);
 
   async function confirmAttendance() {
-    if (cameraState !== 'ready' || !modelReady || !videoRef.current?.videoWidth || submitting) return;
+    if (cameraState !== 'ready' || !videoRef.current?.videoWidth || submitting) return;
     setSubmitting(true);
     setCameraError('');
     try {
-      const detection = await faceapi
-        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.6 }))
-        .withFaceLandmarks()
-        .withFaceDescriptor();
-      if (!detection) throw new Error('Không phát hiện khuôn mặt. Hãy nhìn thẳng vào camera.');
-      await onSuccess(Array.from(detection.descriptor), await compressWebcamFrame(videoRef.current));
+      let descriptor = [];
+      if (modelReady) {
+        const detection = await faceapi
+          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 }))
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+        if (detection) {
+          descriptor = Array.from(detection.descriptor);
+        }
+      }
+      await onSuccess(descriptor, await compressWebcamFrame(videoRef.current));
       onClose();
     } catch (error) {
       setCameraError(error.message);
@@ -2034,7 +2185,46 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     }
   }
 
-  return <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><motion.div className="face-modal" initial={{ scale: .94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}><div className="face-modal-header"><span className="section-label">FACE AUTHENTICATION</span><button className="modal-close" aria-label="Đóng" onClick={onClose}>✕</button></div><h2>{checkedIn ? 'Xác nhận check-out' : faceRegistered ? 'Xác thực check-in' : 'Đăng ký khuôn mặt'}</h2><div className="camera-stage">{cameraState === 'error' ? <div className="camera-message"><Camera size={30} /><strong>Không mở được camera</strong><span>{cameraError}</span></div> : <><video ref={videoRef} className="camera-video" autoPlay muted playsInline /><div className="scan-frame"><UserRound size={52} /><span /></div><div className="scan-line" /></>}</div><p>{cameraState === 'starting' ? 'Đang tải nhận diện khuôn mặt và yêu cầu quyền camera...' : cameraState === 'ready' ? 'Đưa khuôn mặt vào khung hình, sau đó xác nhận.' : 'Vui lòng cấp quyền camera và thử lại.'}</p>{cameraError && cameraState !== 'error' && <div className="camera-error">{cameraError}</div>}<button className="checkout-button" disabled={cameraState !== 'ready' || !modelReady || submitting} onClick={confirmAttendance}>{submitting ? 'ĐANG XÁC THỰC...' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN'}</button></motion.div></motion.div>;
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+      <motion.div className="face-modal" initial={{ scale: 0.94, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}>
+        <div className="face-modal-header">
+          <span className="section-label">FACE AUTHENTICATION</span>
+          <button className="modal-close" aria-label="Đóng" onClick={onClose}>✕</button>
+        </div>
+        <h2>{checkedIn ? 'Xác nhận check-out' : faceRegistered ? 'Xác thực check-in' : 'Đăng ký khuôn mặt'}</h2>
+        <div className="camera-stage">
+          {cameraState === 'error' ? (
+            <div className="camera-message">
+              <Camera size={30} />
+              <strong>Không mở được camera</strong>
+              <span>{cameraError}</span>
+            </div>
+          ) : (
+            <>
+              <video ref={videoRef} className="camera-video" autoPlay muted playsInline />
+              <div className="scan-frame"><UserRound size={52} /><span /></div>
+              <div className="scan-line" />
+            </>
+          )}
+        </div>
+        <p>
+          {cameraState === 'starting' ? 'Đang khởi động camera...' : 
+           cameraState === 'ready' ? 'Đưa khuôn mặt vào khung hình, sau đó xác nhận trực tiếp.' : 
+           'Vui lòng cấp quyền camera và thử lại.'}
+        </p>
+        {cameraError && cameraState !== 'error' && <div className="camera-error">{cameraError}</div>}
+        <button
+          className="checkout-button"
+          style={{ backgroundColor: cameraState === 'ready' && !submitting ? '#0d9488' : '#9ca3af', opacity: cameraState === 'ready' && !submitting ? 1 : 0.7 }}
+          disabled={cameraState !== 'ready' || submitting}
+          onClick={confirmAttendance}
+        >
+          {cameraState === 'ready' ? (submitting ? 'ĐANG XÁC THỰC...' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN') : 'ĐANG MỞ CAMERA...'}
+        </button>
+      </motion.div>
+    </motion.div>
+  );
 }
 
 function RegisterModal({ onClose, onSuccess }) {
@@ -2642,3 +2832,4 @@ function ForgotPasswordModal({ onClose }) {
 }
 
 export default App;
+

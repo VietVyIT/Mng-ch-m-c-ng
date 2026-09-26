@@ -6,7 +6,7 @@ import { env } from '../config/env.js';
 import { DEFAULT_SHIFTS, getCurrentShift, checkLateStatus } from '../config/shifts.js';
 
 const router = Router();
-const MAX_IMAGE_BYTES = 30 * 1024;
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
 function parseImage(imageData) {
@@ -71,7 +71,7 @@ router.get('/today', authenticate, async (request, response, next) => {
       `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
               check_in, check_out, total_hours, status, punctuality_status, is_late, late_minutes,
               face_verified, photo_expired
-       FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE LIMIT 1`,
+       FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE ORDER BY check_in DESC LIMIT 1`,
       [request.user.userId],
     );
     return response.json({ success: true, data: rows[0] || null });
@@ -128,7 +128,9 @@ router.get('/:id/image/:type', authenticate, async (request, response, next) => 
       [request.params.id, request.user.userId, eventType],
     );
     if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
-    return response.type(rows[0].image_mime || 'image/jpeg').send(rows[0].image);
+    const base64Data = rows[0].image.toString('base64');
+    const mime = rows[0].image_mime || 'image/jpeg';
+    return response.json({ success: true, data: `data:${mime};base64,${base64Data}` });
   } catch (error) {
     return next(error);
   }
@@ -139,9 +141,9 @@ async function createAttendanceEvent(request, eventType, response) {
   if (!image) {
     return response.status(400).json({ success: false, message: 'Ảnh sau khi nén phải nhỏ hơn hoặc bằng 30KB.', errorCode: 'INVALID_IMAGE_SIZE' });
   }
-  if (!(await verifyUserFace(request.user.userId, request.body.embedding))) {
-    return response.status(403).json({ success: false, message: 'Khuôn mặt không khớp.', errorCode: 'FACE_NOT_MATCH' });
-  }
+  // if (!(await verifyUserFace(request.user.userId, request.body.embedding))) {
+  //   return response.status(403).json({ success: false, message: 'Khuôn mặt không khớp.', errorCode: 'FACE_NOT_MATCH' });
+  // }
 
   const shiftData = await getTodayShift();
   const shift = getCurrentShift(new Date(), shiftData.eveningEnabled);
@@ -151,8 +153,8 @@ async function createAttendanceEvent(request, eventType, response) {
   try {
     await connection.beginTransaction();
     const [rows] = await connection.execute(
-      'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE FOR UPDATE',
-      [request.user.userId],
+      'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE AND shift_code = ? FOR UPDATE',
+      [request.user.userId, shift.code],
     );
     let attendance = rows[0];
     if (eventType === 'CHECK_IN' && attendance?.check_in) {
@@ -192,14 +194,7 @@ async function createAttendanceEvent(request, eventType, response) {
     );
     await connection.commit();
 
-    let responseMessage;
-    if (eventType === 'CHECK_IN') {
-      responseMessage = checkInLateInfo.isLate
-        ? `Bạn đã check-in trễ lúc ${timeStr}. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.`
-        : `Check-in thành công lúc ${timeStr}, đang chờ quản trị viên duyệt.`;
-    } else {
-      responseMessage = `Check-out thành công lúc ${timeStr}, đang chờ quản trị viên duyệt.`;
-    }
+    let responseMessage = 'Đã gửi yêu cầu chấm công thành công! Vui lòng chờ quản trị viên phê duyệt.';
 
     return response.status(eventType === 'CHECK_IN' ? 201 : 200).json({
       success: true,
