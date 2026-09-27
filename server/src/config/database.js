@@ -49,7 +49,6 @@ export async function checkDatabaseConnection() {
       await connection.query('ALTER TABLE attendance_events MODIFY COLUMN image LONGTEXT');
       console.log('Đã cập nhật image columns thành LONGTEXT');
     } catch(e) { }
-    }
   } catch (err) {
     console.error("Lỗi khởi tạo schema MySQL:", err.message);
   } finally {
