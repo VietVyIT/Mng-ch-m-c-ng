@@ -594,7 +594,8 @@ function AdminAttendanceWorkArea({ user }) {
         <div className="panel-heading"><div><h3>Face ID Action</h3><p>Chụp ảnh nén để xác thực chấm công.</p></div><Camera size={20} /></div>
         <div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>
         {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
-<button className="checkout-button face-action" disabled={!realtimeShift} onClick={() => {
+<button className="checkout-button face-action"  onClick={() => {
+  if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
   if (checkedIn && realtimeShift?.end) {
     const now = new Date();
     const currentHours = now.getHours();
@@ -777,7 +778,8 @@ function UserPortal({ user }) {
     <span className="overview-label">TỔNG QUAN CÁ NHÂN</span>
     <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
     <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${realtimeShift.start.slice(0, 5)} — ${realtimeShift.end.slice(0, 5)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
-<button className="checkout-button face-action" disabled={!checkedIn && !realtimeShift} onClick={() => {
+<button className="checkout-button face-action"  onClick={() => {
+  if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
   if (checkedIn && realtimeShift?.end) {
     const now = new Date();
     const currentHours = now.getHours();
@@ -1123,7 +1125,7 @@ function AdminDashboard({ user }) {
             </div>
             <button
               className="checkout-button face-action"
-              disabled={!checkedIn && !realtimeShift}
+              
               onClick={() => {
                 if (checkedIn && realtimeShift?.end) {
                   const now = new Date();
