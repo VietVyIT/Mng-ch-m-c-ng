@@ -1,292 +1,135 @@
-import { Router } from 'express';
-import { pool } from '../config/database.js';
-import { authenticate } from '../middlewares/auth.middleware.js';
-import { cosineSimilarity, validateEmbedding } from '../utils/face.js';
-import { env } from '../config/env.js';
-import { DEFAULT_SHIFTS, getCurrentShift, checkLateStatus, getVietnamMinutes } from '../config/shifts.js';
+﻿import express from 'express';
+import db from '../config/database.js';
+import authenticate from '../middlewares/auth.middleware.js';
 
-const router = Router();
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+const router = express.Router();
 
-function parseImage(imageData) {
-  if (typeof imageData !== 'string') return null;
-  const match = imageData.match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
-  if (!match) return null;
-  const buffer = Buffer.from(match[2], 'base64');
-  if (buffer.length === 0 || buffer.length > MAX_IMAGE_BYTES) return null;
-  return { buffer, mime: match[1] };
-}
+// Hàm hỗ trợ đổi giờ ra số phút để so sánh
+const toMinutes = (timeStr) => {
+  if (!timeStr) return 0;
+  const parts = timeStr.slice(0, 5).split(':').map(Number);
+  return (parts[0] || 0) * 60 + (parts[1] || 0);
+};
 
-async function purgeExpiredPhotos() {
-  await pool.execute(
-    `UPDATE attendance_events
-     SET image = NULL, photo_expired = TRUE
-     WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
-  );
-  return pool.execute(
-    `UPDATE attendance a
-     SET photo_expired = TRUE
-     WHERE photo_expired = FALSE
-       AND EXISTS (
-         SELECT 1 FROM attendance_events e
-         WHERE e.attendance_id = a.id AND e.photo_expired = TRUE
-       )`,
-  );
-}
-
-async function verifyUserFace(userId, embedding) {
-  if (!validateEmbedding(embedding)) return false;
-  const [rows] = await pool.execute('SELECT face_embedding FROM users WHERE id = ? LIMIT 1', [userId]);
-  const stored = rows[0]?.face_embedding;
-  let storedEmbedding;
+// 1. API CHECK-IN
+router.post('/check-in', authenticate, async (req, res) => {
   try {
-    storedEmbedding = typeof stored === 'string' ? JSON.parse(stored) : stored;
-  } catch {
-    return false;
-  }
-  return validateEmbedding(storedEmbedding) && cosineSimilarity(embedding, storedEmbedding) >= env.faceMatchThreshold;
-}
+    const { image, imageData, shift = 'MORNING', mssv, fullName, client_time, client_date } = req.body;
+    const finalImage = image || imageData || null;
+    const userMssv = mssv || req.user?.mssv || req.user?.username || 'N/A';
+    const userName = fullName || req.user?.fullName || req.user?.name || 'Sinh viên';
 
-async function getTodayShift() {
-  const [rows] = await pool.execute(
-    'SELECT morning_enabled, afternoon_enabled, evening_enabled FROM shift_day_settings WHERE setting_date = CURRENT_DATE LIMIT 1',
-  );
-  
-  const settings = {
-    morningEnabled: rows[0]?.morning_enabled !== 0,
-    afternoonEnabled: rows[0]?.afternoon_enabled !== 0,
-    eveningEnabled: rows[0]?.evening_enabled !== 0,
-  };
+    const checkTime = client_time || new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const checkDate = client_date || new Date().toISOString().slice(0, 10);
+    const fullDateTime = ${checkDate} ;
 
-  const [dbShifts] = await pool.execute('SELECT id as code, name, start_time as start, end_time as end, is_active FROM shifts');
-  let baseShifts = dbShifts.length > 0 ? dbShifts : DEFAULT_SHIFTS;
+    let isLate = 0;
+    let lateMinutes = 0;
 
-  const enabledShifts = baseShifts.filter((shift) => {
-    if (shift.code === 'MORNING' && !settings.morningEnabled) return false;
-    if (shift.code === 'AFTERNOON' && !settings.afternoonEnabled) return false;
-    if (shift.code === 'EVENING' && !settings.eveningEnabled) return false;
-    if (!shift.is_active && shift.is_active !== undefined) return false;
-    return true;
-  });
-
-  return { ...settings, shifts: enabledShifts };
-}
-
-router.get('/shifts/today', authenticate, async (_request, response, next) => {
-  try {
-    const data = await getTodayShift();
-    return response.json({ success: true, data: { ...data, current: getCurrentShift(new Date(), data) } });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-router.get('/today', authenticate, async (request, response, next) => {
-  try {
-    await purgeExpiredPhotos();
-    const [rows] = await pool.execute(
-      `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
-              check_in, check_out, total_hours, status, punctuality_status, is_late, late_minutes,
-              face_verified, photo_expired
-       FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE ORDER BY check_in DESC LIMIT 1`,
-      [request.user.userId],
-    );
-    return response.json({ success: true, data: rows[0] || null });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-router.get('/my', authenticate, async (request, response, next) => {
-  try {
-    await purgeExpiredPhotos();
-    const [rows] = await pool.execute(
-      `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
-              check_in, check_out, total_hours, status, punctuality_status, is_late, late_minutes,
-              face_verified, photo_expired,
-              (SELECT total_work_days FROM users WHERE id = attendance.user_id) AS total_work_days,
-              (SELECT captured_at FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_IN' ORDER BY e.captured_at DESC LIMIT 1) AS check_in_captured_at,
-              (SELECT captured_at FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_OUT' ORDER BY e.captured_at DESC LIMIT 1) AS check_out_captured_at,
-              (SELECT status FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_IN' ORDER BY e.captured_at DESC LIMIT 1) AS check_in_event_status,
-              (SELECT status FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_OUT' ORDER BY e.captured_at DESC LIMIT 1) AS check_out_event_status,
-              (SELECT COUNT(*) FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_IN' AND e.image IS NOT NULL) AS check_in_photo_available,
-              (SELECT COUNT(*) FROM attendance_events e WHERE e.attendance_id = attendance.id AND e.event_type = 'CHECK_OUT' AND e.image IS NOT NULL) AS check_out_photo_available
-       FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC, check_in DESC LIMIT 100`,
-      [request.user.userId],
-    );
-    const [importedRows] = await pool.execute(
-      `SELECT id, attendance_date, shift_code, shift_name, shift_start, shift_end,
-              check_in, check_out, total_hours, status, NULL AS punctuality_status, FALSE AS is_late, 0 AS late_minutes,
-              FALSE AS face_verified, TRUE AS imported_from_excel,
-              (SELECT total_work_days FROM users WHERE id = imported_attendance_records.user_id) AS total_work_days,
-              check_in AS check_in_captured_at, check_out AS check_out_captured_at,
-              NULL AS check_in_event_status, NULL AS check_out_event_status,
-              0 AS check_in_photo_available, 0 AS check_out_photo_available
-       FROM imported_attendance_records
-       WHERE user_id = ?
-       ORDER BY attendance_date DESC, check_in DESC LIMIT 500`,
-      [request.user.userId],
-    );
-    return response.json({ success: true, data: [...rows, ...importedRows].sort((a, b) => new Date(b.attendance_date) - new Date(a.attendance_date)) });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-router.get('/:id/image/:type', authenticate, async (request, response, next) => {
-  try {
-    await purgeExpiredPhotos();
-    const eventType = request.params.type === 'check-in' ? 'CHECK_IN' : request.params.type === 'check-out' ? 'CHECK_OUT' : null;
-    if (!eventType) return response.status(400).json({ success: false, message: 'Loại ảnh không hợp lệ.' });
-    const [rows] = await pool.execute(
-      `SELECT image, image_mime FROM attendance_events
-       WHERE attendance_id = ? AND user_id = ? AND event_type = ?
-       ORDER BY captured_at DESC LIMIT 1`,
-      [request.params.id, request.user.userId, eventType],
-    );
-    if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
-    const base64Data = rows[0].image.toString('base64');
-    const mime = rows[0].image_mime || 'image/jpeg';
-    return response.json({ success: true, data: `data:${mime};base64,${base64Data}` });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-async function createAttendanceEvent(request, eventType, response) {
-    const rawImageData = request.body.imageData;
-    if (!rawImageData || !rawImageData.startsWith('data:image/')) {
-      return response.status(400).json({ success: false, message: 'Ảnh chụp không hợp lệ.', errorCode: 'INVALID_IMAGE' });
+    // Truy vấn bảng 'shifts' (TUYỆT ĐỐI KHÔNG GỌI morning_enabled)
+    try {
+      const [shifts] = await db.query('SELECT * FROM shifts WHERE id = ?', [shift]);
+      if (shifts.length > 0) {
+        if (!Boolean(shifts[0].is_active)) {
+          return res.status(400).json({ success: false, message: Ca  hiện đang đóng! });
+        }
+        const curMin = toMinutes(checkTime);
+        const startMin = toMinutes(shifts[0].start_time);
+        if (curMin > startMin) {
+          isLate = 1;
+          lateMinutes = curMin - startMin;
+        }
+      }
+    } catch (e) {
+      console.warn("Bỏ qua lỗi kiểm tra ca:", e.message);
     }
 
-    const shiftData = await getTodayShift();
-    const shift = getCurrentShift(new Date(), shiftData);
-    if (!shift) return response.status(409).json({ success: false, message: 'Hiện không có ca làm việc nào được bật.', errorCode: 'NO_ENABLED_SHIFT' });
+    await db.query(
+      INSERT INTO attendance_logs 
+       (mssv, full_name, shift, work_date, check_in_time, check_in_image, status, is_late, late_minutes)
+       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?),
+      [userMssv, userName, shift, checkDate, fullDateTime, finalImage, isLate, lateMinutes]
+    );
 
-    const connection = await pool.getConnection();
-    try {
-      await connection.beginTransaction();
-
-      const clientDateStr = request.body.client_date || new Date().toISOString().split('T')[0];
-      const clientTimeStr = request.body.client_time || null;
-      const clientDateTime = `${clientDateStr} ${clientTimeStr || '00:00:00'}`;
-
-      const [rows] = await connection.execute(
-        'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = ? AND shift_code = ? FOR UPDATE',
-        [request.user.userId, clientDateStr, shift.code],
-      );
-      let attendance = rows[0];
-      if (eventType === 'CHECK_IN' && attendance?.check_in) {
-        await connection.rollback();
-        return response.status(409).json({ success: false, message: 'Bạn đã check-in hôm nay.', errorCode: 'ALREADY_CHECKED_IN' });
-      }
-      if (eventType === 'CHECK_OUT' && (!attendance?.check_in || attendance?.check_out)) {
-        await connection.rollback();
-        return response.status(409).json({ success: false, message: attendance?.check_out ? 'Bạn đã check-out hôm nay.' : 'Bạn chưa check-in hôm nay.', errorCode: 'CHECK_IN_REQUIRED' });
-      }
-
-      const now = new Date();
-      let nowMinutes = getVietnamMinutes(now);
-
-      if (clientTimeStr) {
-        const parts = clientTimeStr.split(':');
-        if (parts.length >= 2) {
-          const clientHours = parseInt(parts[0], 10);
-          const clientMinutes = parseInt(parts[1], 10);
-          if (!isNaN(clientHours) && !isNaN(clientMinutes)) {
-            nowMinutes = clientHours * 60 + clientMinutes;
-          }
-        }
-      }
-      
-      if (eventType === 'CHECK_OUT') {
-        const [endHour, endMinute] = shift.end.split(':').map(Number);
-        const endMinutes = endHour * 60 + endMinute;
-        if (nowMinutes < endMinutes) {
-          await connection.rollback();
-          return response.status(400).json({ success: false, message: `Chưa đến giờ kết thúc ca làm việc (${shift.end}). Bạn không thể check-out trước giờ!`, errorCode: 'TOO_EARLY_CHECKOUT' });
-        }
-      }
-
-      let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
-
-      if (!attendance) {
-        // Calculate late status manually using nowMinutes (client time)
-        const [startHour, startMinute] = shift.start.split(':').map(Number);
-        const startMinutes = startHour * 60 + startMinute;
-        const diffMinutes = Math.max(0, nowMinutes - startMinutes);
-        const isLate = diffMinutes > 10;
-        
-        checkInLateInfo = {
-          isLate,
-          punctualityStatus: isLate ? 'LATE' : 'ON_TIME',
-          lateMinutes: isLate ? diffMinutes : 0
-        };
-
-        const [insert] = await connection.execute(
-          `INSERT INTO attendance
-           (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, is_late, late_minutes, face_verified)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, TRUE)`,
-          [request.user.userId, clientDateStr, shift.code, shift.name, shift.start, shift.end, clientDateTime, checkInLateInfo.punctualityStatus, checkInLateInfo.isLate, checkInLateInfo.lateMinutes],
-        );
-        attendance = { id: insert.insertId, check_in: true };
-      } else if (eventType === 'CHECK_OUT') {
-        await connection.execute(
-          "UPDATE attendance SET check_out = ?, check_out_image = ?, total_hours = ROUND(TIMESTAMPDIFF(MINUTE, check_in, ?) / 60, 2), status = 'PENDING' WHERE id = ?",
-          [clientDateTime, rawImageData, clientDateTime, attendance.id],
-        );
-      }
-
-      await connection.execute(
-        `INSERT INTO attendance_events
-         (attendance_id, user_id, event_type, image, image_mime, face_verified, is_late, punctuality_status, status)
-         VALUES (?, ?, ?, ?, 'image/jpeg', TRUE, ?, ?, 'PENDING')`,
-        [attendance.id, request.user.userId, eventType, rawImageData, checkInLateInfo.isLate, checkInLateInfo.punctualityStatus],
-      );
-      await connection.commit();
-
-    let responseMessage = 'Đã gửi yêu cầu chấm công thành công! Vui lòng chờ quản trị viên phê duyệt.';
-
-    return response.status(eventType === 'CHECK_IN' ? 201 : 200).json({
+    return res.status(200).json({
       success: true,
-      status: 'PENDING',
-      is_late: checkInLateInfo.isLate,
-      punctuality_status: checkInLateInfo.punctualityStatus,
-      late_minutes: checkInLateInfo.lateMinutes,
-      check_in_time: eventType === 'CHECK_IN' ? now.toISOString() : undefined,
-      check_out_time: eventType === 'CHECK_OUT' ? now.toISOString() : undefined,
-      message: responseMessage,
-      data: {
-        attendance_id: attendance.id,
-        status: 'PENDING',
-        is_late: checkInLateInfo.isLate,
-        punctuality_status: checkInLateInfo.punctualityStatus,
-      },
+      message: isLate ? Check-in thành công (Trễ  phút) : 'Check-in đúng giờ thành công!'
     });
   } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
-}
-
-router.post('/check-in', authenticate, async (request, response, next) => {
-  try {
-    return await createAttendanceEvent(request, 'CHECK_IN', response);
-  } catch (error) {
-    console.error("Check-in error:", error);
-    return response.status(500).json({ success: false, message: 'Lỗi server: ' + (error.message || 'Không xác định') });
+    console.error("CHECK-IN ERROR:", error);
+    return res.status(500).json({ success: false, message: 'Lỗi server: ' + error.message });
   }
 });
 
-router.post('/check-out', authenticate, async (request, response, next) => {
+// 2. API CHECK-OUT
+router.post('/check-out', authenticate, async (req, res) => {
   try {
-    return await createAttendanceEvent(request, 'CHECK_OUT', response);
+    const { image, imageData, shift = 'MORNING', mssv, fullName, client_time, client_date } = req.body;
+    const finalImage = image || imageData || null;
+    const userMssv = mssv || req.user?.mssv || req.user?.username || 'N/A';
+    const userName = fullName || req.user?.fullName || req.user?.name || 'Sinh viên';
+
+    const checkTime = client_time || new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const checkDate = client_date || new Date().toISOString().slice(0, 10);
+    const fullDateTime = ${checkDate} ;
+
+    // Kiểm tra giờ check-out từ bảng 'shifts'
+    try {
+      const [shifts] = await db.query('SELECT * FROM shifts WHERE id = ?', [shift]);
+      if (shifts.length > 0 && shifts[0].end_time) {
+        const curMin = toMinutes(checkTime);
+        const endMin = toMinutes(shifts[0].end_time);
+        if (curMin < endMin) {
+          return res.status(400).json({
+            success: false,
+            message: Chưa đến giờ kết thúc ca (). Không thể check-out trước giờ!
+          });
+        }
+      }
+    } catch (e) {
+      console.warn("Bỏ qua lỗi kiểm tra giờ ra:", e.message);
+    }
+
+    const [rows] = await db.query(
+      SELECT id FROM attendance_logs 
+       WHERE (mssv = ? OR full_name = ?) AND work_date = ?
+       ORDER BY id DESC LIMIT 1,
+      [userMssv, userName, checkDate]
+    );
+
+    if (rows.length === 0) {
+      await db.query(
+        INSERT INTO attendance_logs 
+         (mssv, full_name, shift, work_date, check_out_time, check_out_image, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'PENDING'),
+        [userMssv, userName, shift, checkDate, fullDateTime, finalImage]
+      );
+    } else {
+      await db.query(
+        UPDATE attendance_logs 
+         SET check_out_time = ?, check_out_image = ? 
+         WHERE id = ?,
+        [fullDateTime, finalImage, rows[0].id]
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Xác nhận check-out thành công! Chờ Admin phê duyệt.'
+    });
   } catch (error) {
-    console.error("Check-out error:", error);
-    return response.status(500).json({ success: false, message: 'Lỗi server: ' + (error.message || 'Không xác định') });
+    console.error("CHECK-OUT ERROR:", error);
+    return res.status(500).json({ success: false, message: 'Lỗi server: ' + error.message });
+  }
+});
+
+// APIs fallback to handle GET/PUT shifts if needed, to prevent routing errors if they call it on attendance route.
+router.get('/shifts', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM shifts');
+    res.json({ success: true, data: rows });
+  } catch (e) {
+    res.json({ success: false, data: [] });
   }
 });
 
