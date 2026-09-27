@@ -44,7 +44,7 @@ if (import.meta.env.PROD && !configuredApiUrl) {
   console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
 }
 
-function useRealtimeShift(eveningEnabled) {
+function useRealtimeShift(shiftSettings) {
   const [currentShift, setCurrentShift] = useState(null);
 
   useEffect(() => {
@@ -52,11 +52,11 @@ function useRealtimeShift(eveningEnabled) {
       const now = new Date();
       const totalMinutes = now.getHours() * 60 + now.getMinutes();
       
-      if (totalMinutes >= 360 && totalMinutes <= 720) {
+      if (totalMinutes >= 360 && totalMinutes <= 720 && shiftSettings?.morningEnabled !== false) {
         setCurrentShift({ code: 'MORNING', name: 'CA SÁNG', start: '07:30:00', end: '12:00:00' });
-      } else if (totalMinutes > 720 && totalMinutes <= 1050) {
+      } else if (totalMinutes > 720 && totalMinutes <= 1050 && shiftSettings?.afternoonEnabled !== false) {
         setCurrentShift({ code: 'AFTERNOON', name: 'CA CHIỀU', start: '13:30:00', end: '17:30:00' });
-      } else if (totalMinutes > 1050 && totalMinutes <= 1320 && eveningEnabled !== false) {
+      } else if (totalMinutes > 1050 && totalMinutes <= 1320 && shiftSettings?.eveningEnabled !== false) {
         setCurrentShift({ code: 'EVENING', name: 'CA TỐI', start: '18:00:00', end: '20:00:00' });
       } else {
         setCurrentShift(null);
@@ -66,7 +66,7 @@ function useRealtimeShift(eveningEnabled) {
     updateShift();
     const interval = setInterval(updateShift, 30000);
     return () => clearInterval(interval);
-  }, [eveningEnabled]);
+  }, [shiftSettings?.morningEnabled, shiftSettings?.afternoonEnabled, shiftSettings?.eveningEnabled]);
 
   return currentShift;
 }
@@ -80,6 +80,7 @@ const adminNavItems = [
   { label: 'Chấm công', icon: CalendarCheck },
   { label: 'Lịch sử', icon: FileClock },
   { label: 'Quản lý sinh viên', icon: UsersRound },
+  { label: 'Quản lý ca làm', icon: Clock3 },
   { label: 'Hồ sơ', icon: UserRound },
 ];
 const userNavItems = [
@@ -160,7 +161,9 @@ function parseAttendanceWorkbook(buffer) {
   const nameColumn = findColumn([/họ\s*&?\s*tên/i, /họ và tên/i], 1);
   const mssvColumn = findColumn([/mssv/i, /mã\s*sinh\s*viên/i, /mã\s*sv/i], 2);
   const phoneColumn = findColumn([/sđt/i, /điện thoại/i, /phone/i], 4);
-  const totalColumn = findColumn([/^total$/i, /tổng/i], rows[dateRowIndex].length - 1);
+  const totalColumn = findColumn([/^total$/i, /tổng\s*công/i, /tổng/i], rows[dateRowIndex].length - 1);
+  const totalHoursColumn = findColumn([/tổng\s*giờ/i, /số\s*giờ/i], -1);
+
   const dates = [];
   let currentDate = null;
   rows[dateRowIndex].forEach((cell, column) => {
@@ -178,7 +181,16 @@ function parseAttendanceWorkbook(buffer) {
     const userName = cleanName(row[nameColumn]);
     if (!userName || /^stt$/i.test(userName) || /^tổng$/i.test(userName)) continue;
     const userMSSV = String(row[mssvColumn] || '').trim();
-    const summary = { userName, userMSSV, phone: cleanName(row[phoneColumn]), totalWorkDays: Number(String(row[totalColumn]).replace(',', '.')) || 0, shifts: 0 };
+    
+    const summary = {
+      userName,
+      userMSSV,
+      phone: cleanName(row[phoneColumn]),
+      totalWorkDays: Number(String(row[totalColumn] || '0').replace(',', '.')) || 0,
+      totalHours: totalHoursColumn >= 0 ? (Number(String(row[totalHoursColumn] || '0').replace(',', '.')) || 0) : 0,
+      shifts: 0
+    };
+
     for (let column = 0; column < row.length; column += 1) {
       const shiftName = String(shifts[column] || '').trim();
       const shift = IMPORT_SHIFTS[shiftName];
@@ -483,6 +495,7 @@ function PageContent({ page, user, onUserUpdated }) {
     return <UserPortal user={user} />;
   }
   if (page === 'Quản lý sinh viên') return <StudentManagement />;
+  if (page === 'Quản lý ca làm') return <ShiftManagement />;
   if (page === 'Chấm công') return <AdminAttendanceWorkArea user={user} />;
   if (page === 'Lịch sử') return <AttendanceHistory user={user} />;
   if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
@@ -492,7 +505,7 @@ function PageContent({ page, user, onUserUpdated }) {
 
 function AdminAttendanceWorkArea({ user }) {
   const [shiftData, setShiftData] = useState(null);
-  const realtimeShift = useRealtimeShift(shiftData?.eveningEnabled);
+  const realtimeShift = useRealtimeShift(shiftData);
   const [today, setToday] = useState(null);
   const [faceModal, setFaceModal] = useState(false);
   const [checkedIn, setCheckedIn] = useState(false);
@@ -681,7 +694,11 @@ function UserProfile({ user, onUserUpdated }) {
 
   return <section className="profile-page"><div className="profile-page-heading"><span className="section-label">MY PROFILE</span><h2>Hồ sơ cá nhân</h2><p>Cập nhật thông tin liên hệ hoặc đổi mật khẩu khi cần.</p></div><div className="profile-grid">
     <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={user.username} disabled /></label><label>MSSV<input value={profile.studentCode} onChange={(event) => setProfile({ ...profile, studentCode: event.target.value })} placeholder="Nhập mã số sinh viên" /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
-    <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>Mật khẩu mới cần có ít nhất 6 ký tự.</p></div><LockKeyhole size={20} /></div><label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label><label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
+    {user.role !== 'ADMIN' ? (
+      <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>Mật khẩu mới cần có ít nhất 6 ký tự.</p></div><LockKeyhole size={20} /></div><label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label><label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
+    ) : (
+      <div className="content-panel profile-form" style={{ opacity: 0.7 }}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>Tài khoản Quản trị viên (Admin) không được phép thay đổi mật khẩu.</p></div><LockKeyhole size={20} /></div><label>Mật khẩu hiện tại<input type="password" disabled value="********" /></label><label>Mật khẩu mới<input type="password" disabled value="********" /></label><button className="secondary-button profile-password-button" type="button" disabled>KHÔNG KHẢ DỤNG</button></div>
+    )}
   </div></section>;
 }
 
@@ -690,7 +707,7 @@ function UserPortal({ user }) {
   const [checkedIn, setCheckedIn] = useState(false);
   const [today, setToday] = useState(null);
   const [shift, setShift] = useState(null);
-  const realtimeShift = useRealtimeShift(shift?.eveningEnabled);
+  const realtimeShift = useRealtimeShift(shift);
   const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
 
@@ -854,8 +871,8 @@ function AdminDashboard({ user }) {
   const [checkedIn, setCheckedIn] = useState(false);
   const [latestAttendance, setLatestAttendance] = useState(null);
   const [approvals, setApprovals] = useState([]);
-  const [eveningEnabled, setEveningEnabled] = useState(true);
-  const realtimeShift = useRealtimeShift(eveningEnabled);
+  const [shiftSettings, setShiftSettings] = useState({ morningEnabled: true, afternoonEnabled: true, eveningEnabled: true });
+  const realtimeShift = useRealtimeShift(shiftSettings);
   const [todayShift, setTodayShift] = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [showAllModal, setShowAllModal] = useState(false);
@@ -934,7 +951,13 @@ function AdminDashboard({ user }) {
         fetch(`${apiUrl}/admin/shifts/${new Date().toISOString().slice(0, 10)}`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.json()),
       ]).then(([approvalBody, shiftBody]) => {
         setApprovals(approvalBody.data || []);
-        setEveningEnabled(shiftBody.data?.eveningEnabled !== false);
+        if (shiftBody.data) {
+          setShiftSettings({
+            morningEnabled: shiftBody.data.morningEnabled !== false,
+            afternoonEnabled: shiftBody.data.afternoonEnabled !== false,
+            eveningEnabled: shiftBody.data.eveningEnabled !== false,
+          });
+        }
       }).catch(() => {});
       loadDashboardStats();
     }
@@ -997,16 +1020,20 @@ function AdminDashboard({ user }) {
     }
   }
 
-  async function toggleEvening() {
-    const next = !eveningEnabled;
+  async function toggleShift(shiftCode) {
+    const nextSettings = { ...shiftSettings };
+    if (shiftCode === 'MORNING') nextSettings.morningEnabled = !shiftSettings.morningEnabled;
+    if (shiftCode === 'AFTERNOON') nextSettings.afternoonEnabled = !shiftSettings.afternoonEnabled;
+    if (shiftCode === 'EVENING') nextSettings.eveningEnabled = !shiftSettings.eveningEnabled;
+
     const token = localStorage.getItem('attendance_token');
     const response = await fetch(`${apiUrl}/admin/shifts/${new Date().toISOString().slice(0, 10)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ eveningEnabled: next }),
+      body: JSON.stringify(nextSettings),
     });
-    if (!response.ok) throw new Error('Không thể cập nhật ca tối.');
-    setEveningEnabled(next);
+    if (!response.ok) throw new Error('Không thể cập nhật trạng thái ca làm việc.');
+    setShiftSettings(nextSettings);
   }
 
   async function previewApproval(eventId) {
@@ -1133,7 +1160,11 @@ function AdminDashboard({ user }) {
         </div>
         {user.role === 'ADMIN' && (
           <div className="approval-heading-actions">
-            <button className={`shift-toggle ${eveningEnabled ? 'on' : ''}`} onClick={toggleEvening}>Ca tối {eveningEnabled ? 'BẬT' : 'TẮT'}</button>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button className={`shift-toggle ${shiftSettings.morningEnabled ? 'on' : ''}`} onClick={() => toggleShift('MORNING')}>Ca sáng {shiftSettings.morningEnabled ? 'BẬT' : 'TẮT'}</button>
+              <button className={`shift-toggle ${shiftSettings.afternoonEnabled ? 'on' : ''}`} onClick={() => toggleShift('AFTERNOON')}>Ca chiều {shiftSettings.afternoonEnabled ? 'BẬT' : 'TẮT'}</button>
+              <button className={`shift-toggle ${shiftSettings.eveningEnabled ? 'on' : ''}`} onClick={() => toggleShift('EVENING')}>Ca tối {shiftSettings.eveningEnabled ? 'BẬT' : 'TẮT'}</button>
+            </div>
             {approvals.length > 0 && (
               <button className="view-all-button" onClick={() => setShowAllModal(true)}>
                 Xem tất cả ({approvals.length})
@@ -2828,6 +2859,156 @@ function ForgotPasswordModal({ onClose }) {
         )}
       </motion.div>
     </motion.div>
+  );
+}
+
+function ShiftManagement() {
+  const [shifts, setShifts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState({ name: '', start_time: '', end_time: '', is_active: true });
+
+  useEffect(() => {
+    loadShifts();
+  }, []);
+
+  async function loadShifts() {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/admin/shifts-config`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể tải danh sách ca làm.');
+      setShifts(body.data || []);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function startEdit(shift) {
+    setEditingId(shift.id);
+    setEditForm({
+      name: shift.name,
+      start_time: shift.start_time,
+      end_time: shift.end_time,
+      is_active: shift.is_active === 1 || shift.is_active === true
+    });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  async function saveEdit(id) {
+    setError('');
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/admin/shifts-config/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(editForm)
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Lỗi khi cập nhật ca làm.');
+      setEditingId(null);
+      await loadShifts();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <section className="shift-management-page">
+      <div className="history-heading">
+        <div>
+          <span className="section-label">GLOBAL SHIFTS SETTINGS</span>
+          <h2>Quản lý cấu hình ca làm việc</h2>
+          <p>Thiết lập tên ca, khung giờ bắt đầu và kết thúc áp dụng cho toàn hệ thống.</p>
+        </div>
+      </div>
+      
+      {error && <div className="form-error">{error}</div>}
+      
+      <div className="history-table-wrap" style={{ marginTop: '20px' }}>
+        <table className="history-table">
+          <thead>
+            <tr>
+              <th>Mã ca</th>
+              <th>Tên ca</th>
+              <th>Giờ bắt đầu</th>
+              <th>Giờ kết thúc</th>
+              <th>Khả dụng (mặc định)</th>
+              <th>Thao tác</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading ? (
+              <tr><td colSpan="6" style={{ textAlign: 'center' }}>Đang tải...</td></tr>
+            ) : shifts.map(shift => (
+              <tr key={shift.id}>
+                <td><strong>{shift.id}</strong></td>
+                <td>
+                  {editingId === shift.id ? (
+                    <input 
+                      type="text" 
+                      value={editForm.name} 
+                      onChange={e => setEditForm({ ...editForm, name: e.target.value })} 
+                      style={{ padding: '4px', border: '1px solid #ccc', borderRadius: '4px', width: '100px' }}
+                    />
+                  ) : shift.name}
+                </td>
+                <td>
+                  {editingId === shift.id ? (
+                    <input 
+                      type="time" 
+                      step="1"
+                      value={editForm.start_time} 
+                      onChange={e => setEditForm({ ...editForm, start_time: e.target.value })} 
+                      style={{ padding: '4px', border: '1px solid #ccc', borderRadius: '4px' }}
+                    />
+                  ) : shift.start_time}
+                </td>
+                <td>
+                  {editingId === shift.id ? (
+                    <input 
+                      type="time" 
+                      step="1"
+                      value={editForm.end_time} 
+                      onChange={e => setEditForm({ ...editForm, end_time: e.target.value })} 
+                      style={{ padding: '4px', border: '1px solid #ccc', borderRadius: '4px' }}
+                    />
+                  ) : shift.end_time}
+                </td>
+                <td>
+                  {editingId === shift.id ? (
+                    <input 
+                      type="checkbox" 
+                      checked={editForm.is_active} 
+                      onChange={e => setEditForm({ ...editForm, is_active: e.target.checked })} 
+                    />
+                  ) : (shift.is_active ? <span style={{ color: '#16a34a', fontWeight: 'bold' }}>CÓ</span> : <span style={{ color: '#dc2626', fontWeight: 'bold' }}>KHÔNG</span>)}
+                </td>
+                <td>
+                  {editingId === shift.id ? (
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button className="primary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => saveEdit(shift.id)}>Lưu</button>
+                      <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={cancelEdit}>Hủy</button>
+                    </div>
+                  ) : (
+                    <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => startEdit(shift)}>Sửa</button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

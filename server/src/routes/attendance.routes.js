@@ -3,7 +3,7 @@ import { pool } from '../config/database.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { cosineSimilarity, validateEmbedding } from '../utils/face.js';
 import { env } from '../config/env.js';
-import { DEFAULT_SHIFTS, getCurrentShift, checkLateStatus } from '../config/shifts.js';
+import { DEFAULT_SHIFTS, getCurrentShift, checkLateStatus, getVietnamMinutes } from '../config/shifts.js';
 
 const router = Router();
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -50,15 +50,33 @@ async function verifyUserFace(userId, embedding) {
 
 async function getTodayShift() {
   const [rows] = await pool.execute(
-    'SELECT evening_enabled FROM shift_day_settings WHERE setting_date = CURRENT_DATE LIMIT 1',
+    'SELECT morning_enabled, afternoon_enabled, evening_enabled FROM shift_day_settings WHERE setting_date = CURRENT_DATE LIMIT 1',
   );
-  return { eveningEnabled: rows[0]?.evening_enabled !== 0, shifts: DEFAULT_SHIFTS.filter((shift) => shift.code !== 'EVENING' || rows[0]?.evening_enabled !== 0) };
+  
+  const settings = {
+    morningEnabled: rows[0]?.morning_enabled !== 0,
+    afternoonEnabled: rows[0]?.afternoon_enabled !== 0,
+    eveningEnabled: rows[0]?.evening_enabled !== 0,
+  };
+
+  const [dbShifts] = await pool.execute('SELECT id as code, name, start_time as start, end_time as end, is_active FROM shifts');
+  let baseShifts = dbShifts.length > 0 ? dbShifts : DEFAULT_SHIFTS;
+
+  const enabledShifts = baseShifts.filter((shift) => {
+    if (shift.code === 'MORNING' && !settings.morningEnabled) return false;
+    if (shift.code === 'AFTERNOON' && !settings.afternoonEnabled) return false;
+    if (shift.code === 'EVENING' && !settings.eveningEnabled) return false;
+    if (!shift.is_active && shift.is_active !== undefined) return false;
+    return true;
+  });
+
+  return { ...settings, shifts: enabledShifts };
 }
 
 router.get('/shifts/today', authenticate, async (_request, response, next) => {
   try {
     const data = await getTodayShift();
-    return response.json({ success: true, data: { ...data, current: getCurrentShift(new Date(), data.eveningEnabled) } });
+    return response.json({ success: true, data: { ...data, current: getCurrentShift(new Date(), data) } });
   } catch (error) {
     return next(error);
   }
@@ -146,7 +164,7 @@ async function createAttendanceEvent(request, eventType, response) {
   // }
 
   const shiftData = await getTodayShift();
-  const shift = getCurrentShift(new Date(), shiftData.eveningEnabled);
+  const shift = getCurrentShift(new Date(), shiftData);
   if (!shift) return response.status(409).json({ success: false, message: 'Hiện không có ca làm việc nào được bật.', errorCode: 'NO_ENABLED_SHIFT' });
 
   const connection = await pool.getConnection();
@@ -167,6 +185,17 @@ async function createAttendanceEvent(request, eventType, response) {
     }
 
     const now = new Date();
+    
+    if (eventType === 'CHECK_OUT') {
+      const nowMinutes = getVietnamMinutes(now);
+      const [endHour, endMinute] = shift.end.split(':').map(Number);
+      const endMinutes = endHour * 60 + endMinute;
+      if (nowMinutes < endMinutes) {
+        await connection.rollback();
+        return response.status(400).json({ success: false, message: `Chưa đến giờ kết thúc ca làm việc (${shift.end}). Bạn không thể check-out trước giờ!`, errorCode: 'TOO_EARLY_CHECKOUT' });
+      }
+    }
+
     const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
 

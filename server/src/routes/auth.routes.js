@@ -89,20 +89,22 @@ router.post('/login', async (request, response, next) => {
       });
     }
 
-        let passwordMatches = false;
+    let passwordMatches = false;
     let hintMessage = '';
 
     if (user.role === 'ADMIN' || user.username === 'admin') {
       passwordMatches = (user.password_hash ? await bcrypt.compare(password, user.password_hash) : false) || (password === 'admin123') || (password === process.env.ADMIN_SECRET_KEY);
       hintMessage = 'Mật khẩu Admin không đúng!';
     } else {
-      const isPasswordChanged = user.password_hash ? await bcrypt.compare(password, user.password_hash) : false;
+      passwordMatches = user.password_hash ? await bcrypt.compare(password, user.password_hash) : false;
+      const isDefaultAllowed = Boolean(user.must_change_password);
+      
       if (!user.student_code || user.student_code.trim() === '' || user.student_code === 'Chưa có MSSV') {
-        passwordMatches = isPasswordChanged || (password === 'user123');
-        hintMessage = 'Mật khẩu không đúng. Mật khẩu mặc định cho tài khoản của bạn là: user123 (do chưa có MSSV)';
+        if (!passwordMatches && isDefaultAllowed && password === 'user123') passwordMatches = true;
+        if (!passwordMatches) hintMessage = 'Mật khẩu không đúng. (Gợi ý: Mật khẩu mặc định là "user123" do bạn chưa có MSSV)';
       } else {
-        passwordMatches = isPasswordChanged || (password === user.student_code);
-        hintMessage = "Mật khẩu không đúng. Mật khẩu mặc định cho tài khoản của bạn là: " + user.student_code + " (MSSV của bạn)";
+        if (!passwordMatches && isDefaultAllowed && password === user.student_code) passwordMatches = true;
+        if (!passwordMatches) hintMessage = `Mật khẩu không đúng. (Gợi ý: Mật khẩu mặc định là MSSV "${user.student_code}")`;
       }
     }
 
@@ -568,6 +570,9 @@ router.patch('/profile', authenticate, async (request, response, next) => {
 
 router.patch('/password', authenticate, async (request, response, next) => {
   try {
+    if (request.user.role === 'ADMIN' || request.user.username === 'admin') {
+      return response.status(403).json({ success: false, message: 'Tài khoản Quản trị viên (Admin) không được phép thay đổi mật khẩu!' });
+    }
     const { currentPassword, newPassword } = request.body;
     if (!currentPassword || !newPassword || newPassword.length < 6) {
       return response.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự.', errorCode: 'VALIDATION_ERROR' });

@@ -16,6 +16,13 @@ async function ensureImportedAttendanceTable(connection) {
   if (!columns.length) {
     await connection.execute('ALTER TABLE users ADD COLUMN total_work_days DECIMAL(8,2) NOT NULL DEFAULT 0');
   }
+  const [hoursColumns] = await connection.execute(
+    `SELECT 1 FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'total_work_hours' LIMIT 1`,
+  );
+  if (!hoursColumns.length) {
+    await connection.execute('ALTER TABLE users ADD COLUMN total_work_hours DECIMAL(8,2) NOT NULL DEFAULT 0');
+  }
   await connection.execute(
     `CREATE TABLE IF NOT EXISTS imported_attendance_records (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -58,6 +65,7 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       const mssv = typeof member.userMSSV === 'string' ? member.userMSSV.trim() : '';
       const phone = typeof member.phone === 'string' ? member.phone.trim().slice(0, 30) : '';
       const totalWorkDays = Number(member.totalWorkDays) || 0;
+      const totalWorkHours = Number(member.totalHours) || 0;
       if (!name) continue;
       const [existing] = await connection.execute(
         `SELECT id FROM users
@@ -69,15 +77,15 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       if (userId) {
         await connection.execute(
           `UPDATE users SET full_name = ?, student_code = NULLIF(?, ''), phone = NULLIF(?, ''),
-           total_work_days = ? WHERE id = ?`,
-          [name, mssv, phone, totalWorkDays, userId],
+           total_work_days = ?, total_work_hours = ? WHERE id = ?`,
+          [name, mssv, phone, totalWorkDays, totalWorkHours, userId],
         );
       } else {
         const [created] = await connection.execute(
           `INSERT INTO users
-           (full_name, student_code, phone, username, password_hash, role, must_change_password, total_work_days)
-           VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?)`,
-          [name, mssv, phone, name, defaultPasswordHash, totalWorkDays],
+           (full_name, student_code, phone, username, password_hash, role, must_change_password, total_work_days, total_work_hours)
+           VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?, ?)`,
+          [name, mssv, phone, name, defaultPasswordHash, totalWorkDays, totalWorkHours],
         );
         userId = created.insertId;
       }
@@ -121,7 +129,7 @@ router.get('/imported-attendance/users', async (request, response, next) => {
     await ensureImportedAttendanceTable(pool);
     const [rows] = await pool.execute(
       `SELECT id, full_name, username, student_code, phone, address,
-              hometown_province_code, hometown_province_name, total_work_days,
+              hometown_province_code, hometown_province_name, total_work_days, total_work_hours,
               face_registered, must_change_password, created_at, updated_at
        FROM users WHERE role = 'USER' AND (? = '' OR LOWER(full_name) LIKE LOWER(?))
        ORDER BY full_name LIMIT 100`,
@@ -138,7 +146,7 @@ router.get('/imported-attendance/users/:userId', async (request, response, next)
     await ensureImportedAttendanceTable(pool);
     const [users] = await pool.execute(
       `SELECT id, full_name, username, student_code, phone, address,
-              hometown_province_code, hometown_province_name, total_work_days,
+              hometown_province_code, hometown_province_name, total_work_days, total_work_hours,
               face_registered, must_change_password, created_at, updated_at
        FROM users WHERE id = ? AND role = 'USER' LIMIT 1`,
       [request.params.userId],
@@ -322,22 +330,17 @@ router.delete('/users/:userId', async (request, response, next) => {
       }
     }
 
-    // Clean up related records in all tables
-    await connection.execute('DELETE FROM notifications WHERE recipient_id = ?', [targetId]);
+    // Clean up related records in all tables (except users)
+    await connection.execute('DELETE FROM notifications WHERE recipient_id = ? AND type LIKE "%ATTENDANCE%"', [targetId]);
     await connection.execute('DELETE FROM attendance_events WHERE user_id = ?', [targetId]);
-    await connection.execute('UPDATE attendance_events SET reviewed_by = NULL WHERE reviewed_by = ?', [targetId]);
-    await connection.execute('UPDATE attendance_deletion_logs SET deleted_by = NULL WHERE deleted_by = ?', [targetId]);
     await connection.execute('DELETE FROM imported_attendance_records WHERE user_id = ?', [targetId]);
     await connection.execute('DELETE FROM attendance WHERE user_id = ?', [targetId]);
-    await connection.execute('UPDATE shift_day_settings SET updated_by = NULL WHERE updated_by = ?', [targetId]);
-
-    // Delete user from users table
-    await connection.execute('DELETE FROM users WHERE id = ?', [targetId]);
+    await connection.execute('UPDATE users SET total_work_days = 0 WHERE id = ?', [targetId]);
 
     await connection.commit();
     return response.json({
       success: true,
-      message: `Đã xóa thành viên "${user.full_name}" (${user.username}) vĩnh viễn khỏi hệ thống.`,
+      message: `Đã xóa dữ liệu điểm danh của thành viên "${user.full_name}" (${user.username}). Tài khoản vẫn được giữ nguyên.`,
     });
   } catch (error) {
     await connection.rollback();
@@ -377,21 +380,17 @@ router.delete('/bulk-delete-users', async (request, response, next) => {
       return response.status(404).json({ success: false, message: 'Không tìm thấy người dùng hợp lệ để xóa.' });
     }
 
-    await connection.execute(`DELETE FROM notifications WHERE recipient_id IN (${placeholders})`, safeUserIds);
+    await connection.execute(`DELETE FROM notifications WHERE recipient_id IN (${placeholders}) AND type LIKE "%ATTENDANCE%"`, safeUserIds);
     await connection.execute(`DELETE FROM attendance_events WHERE user_id IN (${placeholders})`, safeUserIds);
-    await connection.execute(`UPDATE attendance_events SET reviewed_by = NULL WHERE reviewed_by IN (${placeholders})`, safeUserIds);
-    await connection.execute(`UPDATE attendance_deletion_logs SET deleted_by = NULL WHERE deleted_by IN (${placeholders})`, safeUserIds);
     await connection.execute(`DELETE FROM imported_attendance_records WHERE user_id IN (${placeholders})`, safeUserIds);
     await connection.execute(`DELETE FROM attendance WHERE user_id IN (${placeholders})`, safeUserIds);
-    await connection.execute(`UPDATE shift_day_settings SET updated_by = NULL WHERE updated_by IN (${placeholders})`, safeUserIds);
-
-    await connection.execute(`DELETE FROM users WHERE id IN (${placeholders})`, safeUserIds);
+    await connection.execute(`UPDATE users SET total_work_days = 0 WHERE id IN (${placeholders})`, safeUserIds);
 
     await connection.commit();
     return response.json({
       success: true,
       deletedCount: users.length,
-      message: `Đã xóa vĩnh viễn ${users.length} thành viên khỏi hệ thống.`,
+      message: `Đã xóa dữ liệu điểm danh của ${users.length} thành viên. Tài khoản vẫn được giữ nguyên.`,
     });
   } catch (error) {
     await connection.rollback();
@@ -595,12 +594,18 @@ router.get('/dashboard-stats', async (request, response, next) => {
 router.get('/shifts/:date', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT setting_date, evening_enabled FROM shift_day_settings WHERE setting_date = ? LIMIT 1',
+      'SELECT setting_date, morning_enabled, afternoon_enabled, evening_enabled FROM shift_day_settings WHERE setting_date = ? LIMIT 1',
       [request.params.date],
     );
     return response.json({
       success: true,
-      data: { date: request.params.date, eveningEnabled: rows[0]?.evening_enabled !== 0, shifts: DEFAULT_SHIFTS },
+      data: {
+        date: request.params.date,
+        morningEnabled: rows[0]?.morning_enabled !== 0,
+        afternoonEnabled: rows[0]?.afternoon_enabled !== 0,
+        eveningEnabled: rows[0]?.evening_enabled !== 0,
+        shifts: DEFAULT_SHIFTS
+      },
     });
   } catch (error) {
     return next(error);
@@ -609,14 +614,16 @@ router.get('/shifts/:date', async (request, response, next) => {
 
 router.put('/shifts/:date', async (request, response, next) => {
   try {
-    const eveningEnabled = Boolean(request.body.eveningEnabled);
+    const morningEnabled = request.body.morningEnabled !== undefined ? Boolean(request.body.morningEnabled) : true;
+    const afternoonEnabled = request.body.afternoonEnabled !== undefined ? Boolean(request.body.afternoonEnabled) : true;
+    const eveningEnabled = request.body.eveningEnabled !== undefined ? Boolean(request.body.eveningEnabled) : true;
     await pool.execute(
-      `INSERT INTO shift_day_settings (setting_date, evening_enabled, updated_by)
-       VALUES (?, ?, ?)
-       ON DUPLICATE KEY UPDATE evening_enabled = VALUES(evening_enabled), updated_by = VALUES(updated_by)`,
-      [request.params.date, eveningEnabled, request.user.userId],
+      `INSERT INTO shift_day_settings (setting_date, morning_enabled, afternoon_enabled, evening_enabled, updated_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE morning_enabled = VALUES(morning_enabled), afternoon_enabled = VALUES(afternoon_enabled), evening_enabled = VALUES(evening_enabled), updated_by = VALUES(updated_by)`,
+      [request.params.date, morningEnabled, afternoonEnabled, eveningEnabled, request.user.userId],
     );
-    return response.json({ success: true, data: { date: request.params.date, eveningEnabled } });
+    return response.json({ success: true, data: { date: request.params.date, morningEnabled, afternoonEnabled, eveningEnabled } });
   } catch (error) {
     return next(error);
   }
@@ -941,6 +948,28 @@ router.post('/approvals/approve-all', approveAllHandler);
 router.patch('/approvals/approve-all', approveAllHandler);
 router.post('/attendance-requests/approve-all', approveAllHandler);
 router.patch('/attendance-requests/approve-all', approveAllHandler);
+
+router.get('/shifts-config', async (request, response, next) => {
+  try {
+    const [rows] = await pool.execute('SELECT id, name, start_time, end_time, is_active FROM shifts ORDER BY FIELD(id, "MORNING", "AFTERNOON", "EVENING")');
+    return response.json({ success: true, data: rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.put('/shifts-config/:id', async (request, response, next) => {
+  try {
+    const { name, start_time, end_time, is_active } = request.body;
+    await pool.execute(
+      'UPDATE shifts SET name = ?, start_time = ?, end_time = ?, is_active = ? WHERE id = ?',
+      [name, start_time, end_time, is_active ? 1 : 0, request.params.id]
+    );
+    return response.json({ success: true, message: 'Cập nhật thành công' });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 export default router;
 
