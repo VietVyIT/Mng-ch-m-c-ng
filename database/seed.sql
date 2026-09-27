@@ -1,4 +1,4 @@
--- MySQL dump 10.13  Distrib 8.0.46, for Win64 (x86_64)
+ï»¿-- MySQL dump 10.13  Distrib 8.0.46, for Win64 (x86_64)
 --
 -- Host: localhost    Database: attendance_system
 -- ------------------------------------------------------
@@ -319,5 +319,3 @@ UNLOCK TABLES;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
 -- Dump completed on 2026-09-26  9:45:13
-C R E A T E   T A B L E   I F   N O T   E X I S T S   s h i f t s   (   i d   V A R C H A R ( 2 0 )   P R I M A R Y   K E Y ,   n a m e   V A R C H A R ( 5 0 )   N O T   N U L L ,   s t a r t _ t i m e   T I M E   N O T   N U L L ,   e n d _ t i m e   T I M E   N O T   N U L L ,   i s _ a c t i v e   B O O L E A N   D E F A U L T   T R U E ,   u p d a t e d _ a t   T I M E S T A M P   D E F A U L T   C U R R E N T _ T I M E S T A M P   O N   U P D A T E   C U R R E N T _ T I M E S T A M P   ) ;   I N S E R T   I G N O R E   I N T O   s h i f t s   ( i d ,   n a m e ,   s t a r t _ t i m e ,   e n d _ t i m e ,   i s _ a c t i v e )   V A L U E S   ( ' M O R N I N G ' ,   ' C a   S á n g ' ,   ' 0 7 : 3 0 : 0 0 ' ,   ' 1 2 : 0 0 : 0 0 ' ,   T R U E ) ,   ( ' A F T E R N O O N ' ,   ' C a   C h i Áu ' ,   ' 1 3 : 3 0 : 0 0 ' ,   ' 1 7 : 3 0 : 0 0 ' ,   T R U E ) ,   ( ' E V E N I N G ' ,   ' C a   T Ñi ' ,   ' 1 8 : 0 0 : 0 0 ' ,   ' 2 0 : 0 0 : 0 0 ' ,   F A L S E ) ;  
- 
