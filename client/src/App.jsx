@@ -2222,7 +2222,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       let descriptor = [];
       if (modelReady) {
         const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 }))
+          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 }))
           .withFaceLandmarks()
           .withFaceDescriptor();
         if (detection) {
