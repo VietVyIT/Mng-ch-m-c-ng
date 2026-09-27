@@ -593,17 +593,13 @@ router.get('/dashboard-stats', async (request, response, next) => {
 
 router.get('/shifts/:date', async (request, response, next) => {
   try {
-    const [rows] = await pool.execute(
-      'SELECT setting_date, morning_enabled, afternoon_enabled, evening_enabled FROM shift_day_settings WHERE setting_date = ? LIMIT 1',
-      [request.params.date],
-    );
     return response.json({
       success: true,
       data: {
         date: request.params.date,
-        morningEnabled: rows[0]?.morning_enabled !== 0,
-        afternoonEnabled: rows[0]?.afternoon_enabled !== 0,
-        eveningEnabled: rows[0]?.evening_enabled !== 0,
+        morningEnabled: true,
+        afternoonEnabled: true,
+        eveningEnabled: true,
         shifts: DEFAULT_SHIFTS
       },
     });
