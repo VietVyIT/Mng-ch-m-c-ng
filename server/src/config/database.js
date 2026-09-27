@@ -22,31 +22,31 @@ export const initDatabase = async () => {
     console.log("Connected to MySQL. Migrating schemas...");
 
     // 1. Tạo bảng shifts
-    await connection.query(\
-      CREATE TABLE IF NOT EXISTS shifts (
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS shifts (
         id VARCHAR(20) PRIMARY KEY,
         name VARCHAR(50) NOT NULL,
         start_time VARCHAR(10) NOT NULL,
         end_time VARCHAR(10) NOT NULL,
         is_active TINYINT(1) DEFAULT 1,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    \);
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+    );
 
     const [shiftRows] = await connection.query('SELECT COUNT(*) as count FROM shifts');
     if (shiftRows[0].count === 0) {
-      await connection.query(\
-        INSERT INTO shifts (id, name, start_time, end_time, is_active) VALUES
+      await connection.query(
+        `INSERT INTO shifts (id, name, start_time, end_time, is_active) VALUES
         ('MORNING', 'Ca Sáng', '07:30', '12:00', 1),
         ('AFTERNOON', 'Ca Chiều', '13:30', '17:30', 1),
-        ('EVENING', 'Ca Tối', '18:00', '20:00', 0);
-      \);
+        ('EVENING', 'Ca Tối', '18:00', '20:00', 0);`
+      );
       console.log("Đã khởi tạo dữ liệu mẫu cho bảng shifts!");
     }
 
     // 2. Tạo bảng attendance_logs
-    await connection.query(\
-      CREATE TABLE IF NOT EXISTS attendance_logs (
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS attendance_logs (
         id INT AUTO_INCREMENT PRIMARY KEY,
         mssv VARCHAR(50) DEFAULT 'N/A',
         full_name VARCHAR(100) DEFAULT 'Sinh viên',
@@ -60,16 +60,16 @@ export const initDatabase = async () => {
         is_late TINYINT(1) DEFAULT 0,
         late_minutes INT DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-    \);
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+    );
 
     // 3. Đảm bảo các cột ảnh luôn là LONGTEXT
     try {
-      await connection.query(\ALTER TABLE attendance_logs MODIFY COLUMN check_in_image LONGTEXT;\);
-      await connection.query(\ALTER TABLE attendance_logs MODIFY COLUMN check_out_image LONGTEXT;\);
-      await connection.query(\ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS is_late TINYINT(1) DEFAULT 0;\);
-      await connection.query(\ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS late_minutes INT DEFAULT 0;\);
-      await connection.query(\ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS work_date DATE NULL;\);
+      await connection.query(`ALTER TABLE attendance_logs MODIFY COLUMN check_in_image LONGTEXT;`);
+      await connection.query(`ALTER TABLE attendance_logs MODIFY COLUMN check_out_image LONGTEXT;`);
+      await connection.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS is_late TINYINT(1) DEFAULT 0;`);
+      await connection.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS late_minutes INT DEFAULT 0;`);
+      await connection.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS work_date DATE NULL;`);
       
       // Also maintain original tables for backward compatibility until routes are fully refactored
       await connection.query('ALTER TABLE attendance MODIFY COLUMN check_in_image LONGTEXT');
