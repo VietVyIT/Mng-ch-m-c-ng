@@ -52,11 +52,11 @@ function useRealtimeShift(shiftSettings) {
       const now = new Date();
       const totalMinutes = now.getHours() * 60 + now.getMinutes();
       
-      if (totalMinutes >= 360 && totalMinutes <= 720 && shiftSettings?.morningEnabled !== false) {
+      if (totalMinutes >= 0 && totalMinutes <= 720 && shiftSettings?.morningEnabled !== false) {
         setCurrentShift({ code: 'MORNING', name: 'CA SÁNG', start: '07:30:00', end: '12:00:00' });
       } else if (totalMinutes > 720 && totalMinutes <= 1050 && shiftSettings?.afternoonEnabled !== false) {
         setCurrentShift({ code: 'AFTERNOON', name: 'CA CHIỀU', start: '13:30:00', end: '17:30:00' });
-      } else if (totalMinutes > 1050 && totalMinutes <= 1320 && shiftSettings?.eveningEnabled !== false) {
+      } else if (totalMinutes > 1050 && totalMinutes <= 1440 && shiftSettings?.eveningEnabled !== false) {
         setCurrentShift({ code: 'EVENING', name: 'CA TỐI', start: '18:00:00', end: '20:00:00' });
       } else {
         setCurrentShift(null);
@@ -605,17 +605,7 @@ function AdminAttendanceWorkArea({ user }) {
         {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
 <button className="checkout-button face-action"  onClick={() => {
   if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
-  if (checkedIn && realtimeShift?.end) {
-    const now = new Date();
-    const currentHours = now.getHours();
-    const currentMinutes = now.getMinutes();
-    const [endHours, endMinutes] = realtimeShift.end.split(':').map(Number);
-    const currentTime = currentHours * 60 + currentMinutes;
-    const endTime = endHours * 60 + endMinutes;
-    if (currentTime < endTime) {
-      alert(`Chưa đến giờ kết thúc ca làm việc (${formatDisplayTime(realtimeShift.end)}). Bạn không thể check-out trước giờ!`);
-      return;
-    }
+  
   }
   setFaceModal(true);
 }}>
@@ -789,17 +779,7 @@ function UserPortal({ user }) {
     <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
 <button className="checkout-button face-action"  onClick={() => {
   if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
-  if (checkedIn && realtimeShift?.end) {
-    const now = new Date();
-    const currentHours = now.getHours();
-    const currentMinutes = now.getMinutes();
-    const [endHours, endMinutes] = realtimeShift.end.split(':').map(Number);
-    const currentTime = currentHours * 60 + currentMinutes;
-    const endTime = endHours * 60 + endMinutes;
-    if (currentTime < endTime) {
-      alert(`Chưa đến giờ kết thúc ca làm việc (${formatDisplayTime(realtimeShift.end)}). Bạn không thể check-out trước giờ!`);
-      return;
-    }
+  
   }
   setFaceModal(true);
 }}>
@@ -1136,19 +1116,7 @@ function AdminDashboard({ user }) {
               className="checkout-button face-action"
               
               onClick={() => {
-                if (checkedIn && realtimeShift?.end) {
-                  const now = new Date();
-                  const currentHours = now.getHours();
-                  const currentMinutes = now.getMinutes();
-                  const [endHours, endMinutes] = realtimeShift.end.split(':').map(Number);
-                  
-                  const currentTime = currentHours * 60 + currentMinutes;
-                  const endTime = endHours * 60 + endMinutes;
-                  
-                  if (currentTime < endTime) {
-                    alert(`Chưa đến giờ kết thúc ca làm việc (${formatDisplayTime(realtimeShift.end)}). Bạn không thể check-out trước giờ!`);
-                    return;
-                  }
+                
                 }
                 setFaceModal(true);
               }}

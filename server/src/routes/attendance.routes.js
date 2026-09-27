@@ -76,15 +76,7 @@ router.post('/check-out', authenticate, async (req, res) => {
     // Kiểm tra giờ check-out từ bảng 'shifts'
     try {
       const [shifts] = await db.query('SELECT * FROM shifts WHERE id = ?', [shift]);
-      if (shifts.length > 0 && shifts[0].end_time) {
-        const curMin = toMinutes(checkTime);
-        const endMin = toMinutes(shifts[0].end_time);
-        if (curMin < endMin) {
-          return res.status(400).json({
-            success: false,
-            message: `Chưa đến giờ kết thúc ca (${shifts[0].end_time}). Không thể check-out trước giờ!`
-          });
-        }
+      if (false) {
       }
     } catch (e) {
       console.warn("Bỏ qua lỗi kiểm tra giờ ra:", e.message);
