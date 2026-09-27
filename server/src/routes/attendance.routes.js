@@ -170,9 +170,14 @@ async function createAttendanceEvent(request, eventType, response) {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
+
+    const clientDateStr = request.body.client_date || new Date().toISOString().split('T')[0];
+    const clientTimeStr = request.body.client_time || null;
+    const clientDateTime = `${clientDateStr} ${clientTimeStr || '00:00:00'}`;
+
     const [rows] = await connection.execute(
-      'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = CURRENT_DATE AND shift_code = ? FOR UPDATE',
-      [request.user.userId, shift.code],
+      'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = ? AND shift_code = ? FOR UPDATE',
+      [request.user.userId, clientDateStr, shift.code],
     );
     let attendance = rows[0];
     if (eventType === 'CHECK_IN' && attendance?.check_in) {
@@ -185,7 +190,6 @@ async function createAttendanceEvent(request, eventType, response) {
     }
 
     const now = new Date();
-    const clientTimeStr = request.body.client_time || null;
     let nowMinutes = getVietnamMinutes(now);
 
     if (clientTimeStr) {
@@ -209,9 +213,6 @@ async function createAttendanceEvent(request, eventType, response) {
     }
 
     let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
-
-    const clientDateStr = request.body.client_date || new Date().toISOString().split('T')[0];
-    const clientDateTime = `${clientDateStr} ${clientTimeStr || '00:00:00'}`;
 
     if (!attendance) {
       // Calculate late status manually using nowMinutes (client time)
