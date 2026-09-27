@@ -213,6 +213,15 @@ async function compressWebcamFrame(video) {
   return canvas.toDataURL('image/jpeg', 0.7);
 }
 
+
+function formatDisplayTime(timeStr) {
+  if (!timeStr) return '--:--';
+  const str = String(timeStr);
+  if (str.length >= 16 && (str.includes('T') || str.includes(' '))) {
+    return str.slice(11, 16);
+  }
+  return str.slice(0, 5);
+}
 function App() {
   const [user, setUser] = useState(() => {
     try {
@@ -535,7 +544,7 @@ function AdminAttendanceWorkArea({ user }) {
     const pad = (n) => String(n).padStart(2, '0');
     const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
     const client_date = new Date().toLocaleDateString("en-CA");
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time, client_date }) });
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: realtimeShift?.code || 'MORNING', mssv: user?.mssv, fullName: user?.fullName || user?.name, client_time, client_date }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -577,7 +586,7 @@ function AdminAttendanceWorkArea({ user }) {
     <div className="attendance-work-grid">
       <div className="content-panel shift-status-card">
         <div className="panel-heading"><div><h3>Ca làm việc & trạng thái</h3><p>Ca tối chỉ hiển thị khi Admin bật.</p></div></div>
-        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === realtimeShift?.code ? 'active' : ''}`}><div><strong>{shift.name}</strong><small>{shift.start.slice(0, 5)} — {shift.end.slice(0, 5)}</small></div>{shift.code === realtimeShift?.code && <span>ĐANG DIỄN RA</span>}</div>)}</div>
+        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === realtimeShift?.code ? 'active' : ''}`}><div><strong>{shift.name}</strong><small>{formatDisplayTime(shift.start)} — {formatDisplayTime(shift.end)}</small></div>{shift.code === realtimeShift?.code && <span>ĐANG DIỄN RA</span>}</div>)}</div>
         <div className="attendance-status-card">
           <div><span>Trạng thái</span><strong>{statusLabel}</strong></div>
           <div className="attendance-time-row">
@@ -604,7 +613,7 @@ function AdminAttendanceWorkArea({ user }) {
     const currentTime = currentHours * 60 + currentMinutes;
     const endTime = endHours * 60 + endMinutes;
     if (currentTime < endTime) {
-      alert(`Chưa đến giờ kết thúc ca làm việc (${realtimeShift.end.slice(0, 5)}). Bạn không thể check-out trước giờ!`);
+      alert(`Chưa đến giờ kết thúc ca làm việc (${formatDisplayTime(realtimeShift.end)}). Bạn không thể check-out trước giờ!`);
       return;
     }
   }
@@ -730,7 +739,7 @@ function UserPortal({ user }) {
     const pad = (n) => String(n).padStart(2, '0');
     const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
     const client_date = new Date().toLocaleDateString("en-CA");
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time, client_date }) });
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: realtimeShift?.code || 'MORNING', mssv: user?.mssv, fullName: user?.fullName || user?.name, client_time, client_date }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -777,7 +786,7 @@ function UserPortal({ user }) {
 
     <span className="overview-label">TỔNG QUAN CÁ NHÂN</span>
     <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
-    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${realtimeShift.start.slice(0, 5)} — ${realtimeShift.end.slice(0, 5)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
+    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
 <button className="checkout-button face-action"  onClick={() => {
   if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
   if (checkedIn && realtimeShift?.end) {
@@ -788,7 +797,7 @@ function UserPortal({ user }) {
     const currentTime = currentHours * 60 + currentMinutes;
     const endTime = endHours * 60 + endMinutes;
     if (currentTime < endTime) {
-      alert(`Chưa đến giờ kết thúc ca làm việc (${realtimeShift.end.slice(0, 5)}). Bạn không thể check-out trước giờ!`);
+      alert(`Chưa đến giờ kết thúc ca làm việc (${formatDisplayTime(realtimeShift.end)}). Bạn không thể check-out trước giờ!`);
       return;
     }
   }
@@ -1062,7 +1071,7 @@ function AdminDashboard({ user }) {
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ embedding, imageData, client_time, client_date }),
+      body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: realtimeShift?.code || 'MORNING', mssv: user?.mssv, fullName: user?.fullName || user?.name, client_time, client_date }),
     });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
@@ -1105,7 +1114,7 @@ function AdminDashboard({ user }) {
           <div className="today-status">
             <div className="shift-time">
               <span>{realtimeShift?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span>
-              <strong>{realtimeShift ? `${realtimeShift.start.slice(0, 5)} — ${realtimeShift.end.slice(0, 5)}` : '07:30 — 12:00'}</strong>
+              <strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : '07:30 — 12:00'}</strong>
             </div>
             <div className="status-line">
               <span>Ca khả dụng</span>
@@ -1137,7 +1146,7 @@ function AdminDashboard({ user }) {
                   const endTime = endHours * 60 + endMinutes;
                   
                   if (currentTime < endTime) {
-                    alert(`Chưa đến giờ kết thúc ca làm việc (${realtimeShift.end.slice(0, 5)}). Bạn không thể check-out trước giờ!`);
+                    alert(`Chưa đến giờ kết thúc ca làm việc (${formatDisplayTime(realtimeShift.end)}). Bạn không thể check-out trước giờ!`);
                     return;
                   }
                 }
@@ -1465,7 +1474,7 @@ function StudentManagement() {
             {(selected.records || []).map((record) => (
               <div className="imported-record" key={`${record.source}-${record.id}`}>
                 <span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>
-                <small>{record.check_in?.slice(11, 16) || '--:--'} — {record.check_out?.slice(11, 16) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>
+                <small>{formatDisplayTime(record.check_in) || '--:--'} — {formatDisplayTime(record.check_out) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>
                 {record.source === 'Camera' && (
                   <span className="record-photo-actions">
                     <button type="button" disabled={!record.check_in_photo_available || record.check_in_photo_expired} onClick={() => openMemberPhoto(record, 'check-in')}>
@@ -1818,7 +1827,11 @@ function ApprovalRow({ event, onPreview, onReview, onReject }) {
     : '--:--';
   return (
     <div className={`approval-row ${isLate ? 'row-late' : ''}`}>
-      <button className="approval-photo" onClick={onPreview} aria-label="Xem ảnh đối soát">Ảnh</button>
+      {event.check_in_image ? (
+        <img src={event.check_in_image} alt="Minh chứng" className="approval-photo-img" onClick={() => onPreview(event.event_id)} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }} />
+      ) : (
+        <div className="approval-photo-placeholder" style={{ width: '40px', height: '40px', background: '#eee', color: '#888', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '2px', flexShrink: 0 }}>Không có ảnh</div>
+      )}
       <div className="approval-row-content">
         <strong>
           {event.full_name}

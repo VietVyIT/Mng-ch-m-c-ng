@@ -626,23 +626,41 @@ router.put('/shifts/:date', async (request, response, next) => {
 });
 
 async function fetchAttendanceRequests(filter = 'all') {
-  let whereClause = "WHERE e.status = 'PENDING'";
+  let whereClause = "WHERE status = 'PENDING'";
   if (filter === 'late') {
-    whereClause += " AND (a.punctuality_status = 'LATE' OR a.is_late = TRUE OR e.punctuality_status = 'LATE' OR e.is_late = TRUE)";
+    whereClause += " AND is_late = 1";
   } else if (filter === 'ontime') {
-    whereClause += " AND (a.punctuality_status = 'ON_TIME' OR a.punctuality_status IS NULL) AND (a.is_late = FALSE OR a.is_late IS NULL)";
+    whereClause += " AND is_late = 0";
   }
 
   const [rows] = await pool.execute(
-    `SELECT e.id, e.id AS event_id, e.attendance_id, e.user_id, e.event_type, e.captured_at,
-            e.captured_at AS check_in_time, e.status, e.photo_expired, (e.image IS NOT NULL) AS has_photo,
-            a.attendance_date, a.shift_code, a.shift_name, a.shift_start, a.shift_end,
-            a.punctuality_status, a.is_late, a.late_minutes, a.check_in, a.check_out,
-            u.full_name, u.username, u.student_code
-     FROM attendance_events e
-     JOIN attendance a ON a.id = e.attendance_id
-     JOIN users u ON u.id = e.user_id
-     ${whereClause}
+    SELECT 
+      id, id AS event_id,
+      COALESCE(mssv, 'N/A') AS mssv, 
+      COALESCE(mssv, 'N/A') AS student_code,
+      COALESCE(mssv, 'N/A') AS username,
+      COALESCE(full_name, 'Sinh viên') AS full_name, 
+      COALESCE(shift, 'MORNING') AS shift, 
+      COALESCE(shift, 'MORNING') AS shift_name, 
+      work_date, 
+      work_date AS attendance_date,
+      check_in_time, 
+      check_in_time AS captured_at,
+      check_out_time, 
+      check_in_image, 
+      check_out_image, 
+      status, 
+      is_late, 
+      IF(is_late, 'LATE', 'ON_TIME') AS punctuality_status,
+      late_minutes 
+    FROM attendance_logs 
+    
+    ORDER BY check_in_time DESC
+  );
+
+  return rows;
+}
+
      ORDER BY e.captured_at DESC`,
   );
 
@@ -675,19 +693,19 @@ router.get('/approvals', async (request, response, next) => {
 
 async function serveApprovalImage(request, response, next) {
   try {
-    await pool.execute(
-      `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
-       WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
-    );
     const eventId = request.params.id || request.params.eventId;
     const [rows] = await pool.execute(
-      'SELECT image, image_mime FROM attendance_events WHERE id = ? LIMIT 1',
+      'SELECT check_in_image, check_out_image FROM attendance_logs WHERE id = ? LIMIT 1',
       [eventId],
     );
-    if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn.' });
-    const base64Data = rows[0].image.toString('base64');
-    const mime = rows[0].image_mime || 'image/jpeg';
-    return response.json({ success: true, data: `data:${mime};base64,${base64Data}` });
+    const image = rows[0]?.check_in_image || rows[0]?.check_out_image;
+    if (!image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
+    return response.json({ success: true, data: image });
+  } catch (error) {
+    return next(error);
+  }
+}
+` });
   } catch (error) {
     return next(error);
   }
