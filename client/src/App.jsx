@@ -2106,12 +2106,15 @@ function RejectConfirmationModal({ event, reason, setReason, onConfirm, onCancel
   );
 }
 
+let isModelsLoaded = false;
+let isModelsLoading = false;
+
 function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [cameraState, setCameraState] = useState('starting');
   const [cameraError, setCameraError] = useState('');
-  const [modelReady, setModelReady] = useState(false);
+  const [modelReady, setModelReady] = useState(isModelsLoaded);
   const [modelError, setModelError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -2139,10 +2142,15 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
           return;
         }
         streamRef.current = stream;
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setCameraState('ready');
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => {
+            videoRef.current?.play().catch(e => console.error("Lỗi Play Camera:", e));
+            if (!cancelled) setCameraState('ready');
+          };
+        }
       } catch (error) {
+        if (cancelled) return;
         setCameraState('error');
         setCameraError(error.name === 'NotAllowedError'
           ? 'Bạn đã từ chối quyền camera. Hãy cho phép camera trong thanh địa chỉ rồi thử lại.'
@@ -2150,40 +2158,61 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       }
     }
 
-    async function loadModels() {
+    async function loadModelsOnce() {
+      if (isModelsLoaded) {
+        setModelReady(true);
+        return;
+      }
+      if (isModelsLoading) return;
+      isModelsLoading = true;
+
       const LOCAL_URL = apiUrl.replace('/api', '') + '/models';
       const CDN_FALLBACK_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
 
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
+      
       try {
-        await Promise.all([
-          faceapi.nets.tinyFaceDetector.loadFromUri(LOCAL_URL),
-          faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_URL),
-          faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_URL),
+        await Promise.race([
+          Promise.all([
+            faceapi.nets.tinyFaceDetector.loadFromUri(LOCAL_URL),
+            faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_URL),
+            faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_URL),
+          ]),
+          timeoutPromise
         ]);
+        isModelsLoaded = true;
         if (!cancelled) setModelReady(true);
       } catch (localErr) {
-        console.warn("Model local bị lỗi, đang chuyển sang tải từ CDN dự phòng...", localErr);
+        console.warn("Model local bị lỗi hoặc timeout, đang tải từ CDN...", localErr);
         try {
-          await Promise.all([
-            faceapi.nets.tinyFaceDetector.loadFromUri(CDN_FALLBACK_URL),
-            faceapi.nets.faceLandmark68Net.loadFromUri(CDN_FALLBACK_URL),
-            faceapi.nets.faceRecognitionNet.loadFromUri(CDN_FALLBACK_URL),
+          await Promise.race([
+            Promise.all([
+              faceapi.nets.tinyFaceDetector.loadFromUri(CDN_FALLBACK_URL),
+              faceapi.nets.faceLandmark68Net.loadFromUri(CDN_FALLBACK_URL),
+              faceapi.nets.faceRecognitionNet.loadFromUri(CDN_FALLBACK_URL),
+            ]),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
           ]);
+          isModelsLoaded = true;
           if (!cancelled) setModelReady(true);
         } catch (cdnErr) {
-          console.error("Không thể nạp model AI:", cdnErr);
+          console.error("Không thể nạp model AI, fallback sang chế độ cơ bản:", cdnErr);
           if (!cancelled) setModelError("Không thể nạp model AI. Vui lòng kiểm tra mạng!");
         }
+      } finally {
+        isModelsLoading = false;
       }
     }
 
     startVideo();
-    loadModels();
+    loadModelsOnce();
 
     return () => {
       cancelled = true;
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
     };
   }, []);
 
