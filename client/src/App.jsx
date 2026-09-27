@@ -533,8 +533,8 @@ function AdminAttendanceWorkArea({ user }) {
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const client_time = `::`;
-    const client_date = `--`;
+    const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+    const client_date = new Date().toLocaleDateString("en-CA");
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time, client_date }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
@@ -728,8 +728,8 @@ function UserPortal({ user }) {
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const client_time = `::`;
-    const client_date = `--`;
+    const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+    const client_date = new Date().toLocaleDateString("en-CA");
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time, client_date }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
@@ -1057,8 +1057,8 @@ function AdminDashboard({ user }) {
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const client_time = `::`;
-    const client_date = `--`;
+    const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+    const client_date = new Date().toLocaleDateString("en-CA");
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
