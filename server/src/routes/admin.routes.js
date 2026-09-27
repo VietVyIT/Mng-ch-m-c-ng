@@ -634,7 +634,7 @@ async function fetchAttendanceRequests(filter = 'all') {
   }
 
   const [rows] = await pool.execute(
-    SELECT 
+    `SELECT 
       id, id AS event_id,
       COALESCE(mssv, 'N/A') AS mssv, 
       COALESCE(mssv, 'N/A') AS student_code,
@@ -654,21 +654,11 @@ async function fetchAttendanceRequests(filter = 'all') {
       IF(is_late, 'LATE', 'ON_TIME') AS punctuality_status,
       late_minutes 
     FROM attendance_logs 
-    
-    ORDER BY check_in_time DESC
+    ${whereClause}
+    ORDER BY check_in_time DESC`
   );
 
   return rows;
-}
-
-     ORDER BY e.captured_at DESC`,
-  );
-
-  return rows.map((row) => ({
-    ...row,
-    is_late: Boolean(row.is_late || row.punctuality_status === 'LATE'),
-    punctuality_status: row.punctuality_status || (row.is_late ? 'LATE' : 'ON_TIME'),
-  }));
 }
 
 router.get('/attendance-requests', async (request, response, next) => {
@@ -701,11 +691,6 @@ async function serveApprovalImage(request, response, next) {
     const image = rows[0]?.check_in_image || rows[0]?.check_out_image;
     if (!image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
     return response.json({ success: true, data: image });
-  } catch (error) {
-    return next(error);
-  }
-}
-` });
   } catch (error) {
     return next(error);
   }
