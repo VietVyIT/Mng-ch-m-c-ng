@@ -39,7 +39,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/models', express.static(path.join(__dirname, '../public/models')));
 app.use('/api/auth/login', rateLimit({
-  windowMs: 5 * 60 * 1000,
+  windowMs: 20 * 1000,
   limit: 10,
   skipSuccessfulRequests: true,
   standardHeaders: 'draft-8',

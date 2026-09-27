@@ -210,20 +210,7 @@ async function compressWebcamFrame(video) {
   canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
   canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
   canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  let quality = 0.35;
-  let dataUrl = canvas.toDataURL('image/jpeg', quality);
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const bytes = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
-    if (bytes <= PHOTO_MAX_BYTES) return dataUrl;
-    if (bytes > PHOTO_MAX_BYTES) {
-      quality = Math.max(0.08, quality - 0.05);
-    }
-    dataUrl = canvas.toDataURL('image/jpeg', quality);
-  }
-  const finalBytes = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
-  if (finalBytes > PHOTO_MAX_BYTES) throw new Error('Không thể nén ảnh xuống dưới 15KB. Vui lòng thử lại.');
-  return dataUrl;
+  return canvas.toDataURL('image/jpeg', 0.7);
 }
 
 function App() {
@@ -2199,7 +2186,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       let descriptor = [];
       if (modelReady) {
         const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 }))
+          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.35 }))
           .withFaceLandmarks()
           .withFaceDescriptor();
         if (detection) {
