@@ -17,7 +17,7 @@ services:
       # Tự động thực thi seed.sql khi khởi tạo container lần đầu
       - ./database/seed.sql:/docker-entrypoint-initdb.d/01_init_data.sql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
       timeout: 5s
       retries: 5

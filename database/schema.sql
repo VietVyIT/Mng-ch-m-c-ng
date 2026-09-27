@@ -166,3 +166,19 @@ INSERT IGNORE INTO shifts (id, name, start_time, end_time, is_active) VALUES
 ('MORNING', 'Ca Sáng', '07:30:00', '12:00:00', TRUE),
 ('AFTERNOON', 'Ca Chiều', '13:30:00', '17:30:00', TRUE),
 ('EVENING', 'Ca Tối', '18:00:00', '20:00:00', FALSE);
+
+CREATE TABLE IF NOT EXISTS attendance_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  mssv VARCHAR(30) NOT NULL,
+  full_name VARCHAR(150),
+  shift VARCHAR(20),
+  work_date DATE,
+  check_in_time DATETIME,
+  check_in_image LONGTEXT,
+  check_out_time DATETIME,
+  check_out_image LONGTEXT,
+  status ENUM('PENDING','APPROVED','REJECTED') DEFAULT 'PENDING',
+  is_late BOOLEAN DEFAULT FALSE,
+  late_minutes INT DEFAULT 0,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB;
