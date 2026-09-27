@@ -605,8 +605,6 @@ function AdminAttendanceWorkArea({ user }) {
         {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
 <button className="checkout-button face-action"  onClick={() => {
   if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
-  
-  }
   setFaceModal(true);
 }}>
 <Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
@@ -779,8 +777,6 @@ function UserPortal({ user }) {
     <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
 <button className="checkout-button face-action"  onClick={() => {
   if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
-  
-  }
   setFaceModal(true);
 }}>
 <Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
@@ -1116,9 +1112,7 @@ function AdminDashboard({ user }) {
               className="checkout-button face-action"
               
               onClick={() => {
-                
-                }
-                setFaceModal(true);
+  setFaceModal(true);
               }}
             >
               {checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
