@@ -2135,7 +2135,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { facingMode: { ideal: 'user' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
         });
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -2144,10 +2144,8 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
         streamRef.current = stream;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => {
-            videoRef.current?.play().catch(e => console.error("Lỗi Play Camera:", e));
-            if (!cancelled) setCameraState('ready');
-          };
+          await videoRef.current.play();
+          if (!cancelled) setCameraState('ready');
         }
       } catch (error) {
         if (cancelled) return;
