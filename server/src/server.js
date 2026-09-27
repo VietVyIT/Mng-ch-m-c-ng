@@ -6,7 +6,7 @@ async function startServer() {
   try {
     await checkDatabaseConnection();
     app.listen(env.port, () => {
-      console.log(API server đang chạy tại cổng \ (\));
+      console.log(`API server đang chạy tại cổng ${env.port} (${env.nodeEnv})`);
     });
   } catch (error) {
     console.error('Không thể khởi động server:', error);
