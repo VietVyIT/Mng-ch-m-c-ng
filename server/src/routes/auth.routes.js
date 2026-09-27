@@ -570,9 +570,6 @@ router.patch('/profile', authenticate, async (request, response, next) => {
 
 router.patch('/password', authenticate, async (request, response, next) => {
   try {
-    if (request.user.role === 'ADMIN' || request.user.username === 'admin') {
-      return response.status(403).json({ success: false, message: 'Tài khoản Quản trị viên (Admin) không được phép thay đổi mật khẩu!' });
-    }
     const { currentPassword, newPassword } = request.body;
     if (!currentPassword || !newPassword || newPassword.length < 6) {
       return response.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự.', errorCode: 'VALIDATION_ERROR' });
