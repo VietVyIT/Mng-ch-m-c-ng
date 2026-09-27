@@ -765,38 +765,46 @@ router.delete('/attendance/:attendanceId', async (request, response, next) => {
   try {
     await connection.beginTransaction();
     const [rows] = await connection.execute(
-      `SELECT a.id, a.user_id, a.attendance_date, a.shift_name
-       FROM attendance a WHERE a.id = ? LIMIT 1 FOR UPDATE`,
+      `SELECT a.*, u.id AS user_id
+       FROM attendance_logs a 
+       LEFT JOIN users u ON u.student_code = a.mssv OR u.username = a.mssv
+       WHERE a.id = ? LIMIT 1 FOR UPDATE`,
       [request.params.attendanceId],
     );
     if (!rows[0]) {
       await connection.rollback();
       return response.status(404).json({ success: false, message: 'Không tìm thấy bản ghi chấm công.' });
     }
-    const dateInfo = `${rows[0].shift_name || 'Ca làm việc'} - Ngày ${new Date(rows[0].attendance_date).toLocaleDateString('vi-VN')}`;
+    const evt = rows[0];
+    const dateInfo = `${evt.shift || 'Ca làm việc'} - Ngày ${new Date(evt.work_date).toLocaleDateString('vi-VN')}`;
     const message = reason
       ? `Bản ghi chấm công ngày ${dateInfo} đã bị xóa. Lý do: ${reason}`
       : `Bản ghi chấm công ngày ${dateInfo} đã bị xóa.`;
-    await createNotification(connection, {
-      recipientId: rows[0].user_id,
-      type: 'ATTENDANCE_DELETED',
-      title: 'Bạn đã bị xóa chấm công',
-      message,
-      dateInfo,
-      reason,
-    });
+    
+    if (evt.user_id) {
+      await createNotification(connection, {
+        recipientId: evt.user_id,
+        type: 'ATTENDANCE_DELETED',
+        title: 'Bạn đã bị xóa chấm công',
+        message,
+        dateInfo,
+        reason,
+      });
+
+      if (evt.status === 'APPROVED') {
+        await connection.execute(
+          `UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0)
+           WHERE id = ?`,
+          [evt.user_id],
+        );
+      }
+    }
+    
     await connection.execute(
       'INSERT INTO attendance_deletion_logs (attendance_id, deleted_by, reason) VALUES (?, ?, ?)',
       [request.params.attendanceId, request.user.userId, reason || null],
     );
-    await connection.execute(
-      `UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0)
-       WHERE id = ? AND EXISTS (
-         SELECT 1 FROM attendance WHERE id = ? AND status = 'APPROVED'
-       )`,
-      [rows[0].user_id, request.params.attendanceId],
-    );
-    await connection.execute('DELETE FROM attendance WHERE id = ?', [request.params.attendanceId]);
+    await connection.execute('DELETE FROM attendance_logs WHERE id = ?', [request.params.attendanceId]);
     await connection.commit();
     return response.json({ success: true, message: 'Đã xóa bản ghi chấm công.' });
   } catch (error) {
@@ -818,40 +826,36 @@ async function reviewApprovalHandler(request, response, next) {
   try {
     await connection.beginTransaction();
     const [events] = await connection.execute(
-      `SELECT e.attendance_id, e.user_id, e.event_type, a.attendance_date, a.shift_name
-       FROM attendance_events e JOIN attendance a ON a.id = e.attendance_id
-       WHERE e.id = ? AND e.status = ? FOR UPDATE`,
+      `SELECT a.*, u.id AS user_id
+       FROM attendance_logs a 
+       LEFT JOIN users u ON u.student_code = a.mssv OR u.username = a.mssv
+       WHERE a.id = ? AND a.status = ? FOR UPDATE`,
       [eventId, 'PENDING'],
     );
     if (!events[0]) {
       await connection.rollback();
       return response.status(404).json({ success: false, message: 'Yêu cầu không còn chờ duyệt.' });
     }
+    const evt = events[0];
     await connection.execute(
-      'UPDATE attendance_events SET status = ?, reviewed_by = ?, reviewed_at = NOW() WHERE id = ?',
-      [status, request.user.userId, eventId],
+      'UPDATE attendance_logs SET status = ? WHERE id = ?',
+      [status, eventId],
     );
-    const dateInfo = `${events[0].shift_name || 'Ca làm việc'} - Ngày ${new Date(events[0].attendance_date).toLocaleDateString('vi-VN')}`;
-    const eventLabel = events[0].event_type === 'CHECK_IN' ? 'check-in' : 'check-out';
-    await createNotification(connection, {
-      recipientId: events[0].user_id,
-      type: status === 'APPROVED' ? 'ATTENDANCE_APPROVED' : 'ATTENDANCE_REJECTED',
-      title: status === 'APPROVED' ? 'Chấm công đã được phê duyệt' : 'Yêu cầu chấm công bị từ chối',
-      message: status === 'APPROVED'
-        ? `Yêu cầu ${eventLabel} ${dateInfo} của bạn đã được phê duyệt.`
-        : `Yêu cầu ${eventLabel} ${dateInfo} của bạn bị từ chối.${reason ? ` Lý do: ${reason}` : ''}`,
-      dateInfo,
-      reason: status === 'REJECTED' ? reason : null,
-    });
-    const attendanceId = events[0].attendance_id;
-    const [pending] = await connection.execute(
-      "SELECT COUNT(*) AS count FROM attendance_events WHERE attendance_id = ? AND status = 'PENDING'",
-      [attendanceId],
-    );
-    const nextAttendanceStatus = status === 'REJECTED' ? 'REJECTED' : Number(pending[0].count) === 0 ? 'APPROVED' : 'PENDING';
-    await connection.execute('UPDATE attendance SET status = ? WHERE id = ?', [nextAttendanceStatus, attendanceId]);
-    if (status === 'APPROVED' && events[0].event_type === 'CHECK_IN') {
-      await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [events[0].user_id]);
+    const dateInfo = `${evt.shift || 'Ca làm việc'} - Ngày ${new Date(evt.work_date).toLocaleDateString('vi-VN')}`;
+    if (evt.user_id) {
+      await createNotification(connection, {
+        recipientId: evt.user_id,
+        type: status === 'APPROVED' ? 'ATTENDANCE_APPROVED' : 'ATTENDANCE_REJECTED',
+        title: status === 'APPROVED' ? 'Chấm công đã được phê duyệt' : 'Yêu cầu chấm công bị từ chối',
+        message: status === 'APPROVED'
+          ? `Yêu cầu chấm công ${dateInfo} của bạn đã được phê duyệt.`
+          : `Yêu cầu chấm công ${dateInfo} của bạn bị từ chối.${reason ? ` Lý do: ${reason}` : ''}`,
+        dateInfo,
+        reason: status === 'REJECTED' ? reason : null,
+      });
+      if (status === 'APPROVED') {
+        await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [evt.user_id]);
+      }
     }
     await connection.commit();
     return response.json({
@@ -876,14 +880,14 @@ async function approveAllHandler(request, response, next) {
       : null;
 
     let query = `
-      SELECT e.id, e.attendance_id, e.user_id, e.event_type, a.attendance_date, a.shift_name
-      FROM attendance_events e
-      JOIN attendance a ON a.id = e.attendance_id
-      WHERE e.status = 'PENDING'
+      SELECT a.*, u.id AS user_id
+      FROM attendance_logs a
+      LEFT JOIN users u ON u.student_code = a.mssv OR u.username = a.mssv
+      WHERE a.status = 'PENDING'
     `;
     const params = [];
     if (requestedIds && requestedIds.length > 0) {
-      query += ` AND e.id IN (${requestedIds.map(() => '?').join(',')})`;
+      query += ` AND a.id IN (${requestedIds.map(() => '?').join(',')})`;
       params.push(...requestedIds);
     }
     query += ' FOR UPDATE';
@@ -897,33 +901,23 @@ async function approveAllHandler(request, response, next) {
     const eventIds = events.map((e) => e.id);
     const eventIdsPlaceholders = eventIds.map(() => '?').join(',');
     await connection.execute(
-      `UPDATE attendance_events SET status = 'APPROVED', reviewed_by = ?, reviewed_at = NOW() WHERE id IN (${eventIdsPlaceholders})`,
-      [request.user.userId, ...eventIds],
+      `UPDATE attendance_logs SET status = 'APPROVED' WHERE id IN (${eventIdsPlaceholders})`,
+      eventIds,
     );
-
-    const attendanceIds = [...new Set(events.map((e) => e.attendance_id))];
-    const attendancePlaceholders = attendanceIds.map(() => '?').join(',');
-    await connection.execute(
-      `UPDATE attendance SET status = 'APPROVED' WHERE id IN (${attendancePlaceholders})`,
-      attendanceIds,
-    );
-
-    const checkInUserIds = events.filter((e) => e.event_type === 'CHECK_IN').map((e) => e.user_id);
-    for (const userId of checkInUserIds) {
-      await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [userId]);
-    }
 
     for (const evt of events) {
-      const dateInfo = `${evt.shift_name || 'Ca làm việc'} - Ngày ${new Date(evt.attendance_date).toLocaleDateString('vi-VN')}`;
-      const eventLabel = evt.event_type === 'CHECK_IN' ? 'check-in' : 'check-out';
-      await createNotification(connection, {
-        recipientId: evt.user_id,
-        type: 'ATTENDANCE_APPROVED',
-        title: 'Chấm công đã được phê duyệt',
-        message: `Yêu cầu ${eventLabel} ${dateInfo} của bạn đã được phê duyệt hàng loạt.`,
-        dateInfo,
-        reason: null,
-      });
+      if (evt.user_id) {
+        await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [evt.user_id]);
+        const dateInfo = `${evt.shift || 'Ca làm việc'} - Ngày ${new Date(evt.work_date).toLocaleDateString('vi-VN')}`;
+        await createNotification(connection, {
+          recipientId: evt.user_id,
+          type: 'ATTENDANCE_APPROVED',
+          title: 'Chấm công đã được phê duyệt',
+          message: `Yêu cầu chấm công ${dateInfo} của bạn đã được phê duyệt hàng loạt.`,
+          dateInfo,
+          reason: null,
+        });
+      }
     }
 
     await connection.commit();
