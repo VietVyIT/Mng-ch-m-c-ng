@@ -531,8 +531,11 @@ function AdminAttendanceWorkArea({ user }) {
       localStorage.setItem('attendance_user', JSON.stringify({ ...user, faceRegistered: true }));
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const client_time = new Date().toLocaleTimeString('en-GB', { hour12: false });
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time }) });
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const client_time = `::`;
+    const client_date = `--`;
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time, client_date }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -722,8 +725,11 @@ function UserPortal({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const client_time = new Date().toLocaleTimeString('en-GB', { hour12: false });
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time }) });
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const client_time = `::`;
+    const client_date = `--`;
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time, client_date }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -1047,11 +1053,14 @@ function AdminDashboard({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const client_time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const client_time = `::`;
+    const client_date = `--`;
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ embedding, imageData, client_time }),
+      body: JSON.stringify({ embedding, imageData, client_time, client_date }),
     });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
@@ -2863,7 +2872,7 @@ function ShiftManagement() {
     setLoading(true);
     try {
       const token = localStorage.getItem('attendance_token');
-      const response = await fetch(`${apiUrl}/admin/shifts-config`, {
+      const response = await fetch(`${apiUrl}/shifts`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       const body = await response.json();
@@ -2894,7 +2903,7 @@ function ShiftManagement() {
     setError('');
     try {
       const token = localStorage.getItem('attendance_token');
-      const response = await fetch(`${apiUrl}/admin/shifts-config/${id}`, {
+      const response = await fetch(`${apiUrl}/shifts/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(editForm)

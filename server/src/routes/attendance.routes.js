@@ -210,6 +210,9 @@ async function createAttendanceEvent(request, eventType, response) {
 
     let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
 
+    const clientDateStr = request.body.client_date || new Date().toISOString().split('T')[0];
+    const clientDateTime = `${clientDateStr} ${clientTimeStr || '00:00:00'}`;
+
     if (!attendance) {
       // Calculate late status manually using nowMinutes (client time)
       const [startHour, startMinute] = shift.start.split(':').map(Number);
@@ -226,14 +229,14 @@ async function createAttendanceEvent(request, eventType, response) {
       const [insert] = await connection.execute(
         `INSERT INTO attendance
          (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, is_late, late_minutes, face_verified)
-         VALUES (?, CURRENT_DATE, ?, ?, ?, ?, NOW(), 'PENDING', ?, ?, ?, TRUE)`,
-        [request.user.userId, shift.code, shift.name, shift.start, shift.end, checkInLateInfo.punctualityStatus, checkInLateInfo.isLate, checkInLateInfo.lateMinutes],
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, TRUE)`,
+        [request.user.userId, clientDateStr, shift.code, shift.name, shift.start, shift.end, clientDateTime, checkInLateInfo.punctualityStatus, checkInLateInfo.isLate, checkInLateInfo.lateMinutes],
       );
       attendance = { id: insert.insertId, check_in: true };
     } else if (eventType === 'CHECK_OUT') {
       await connection.execute(
-        "UPDATE attendance SET check_out = NOW(), total_hours = ROUND(TIMESTAMPDIFF(MINUTE, check_in, NOW()) / 60, 2), status = 'PENDING' WHERE id = ?",
-        [attendance.id],
+        "UPDATE attendance SET check_out = ?, total_hours = ROUND(TIMESTAMPDIFF(MINUTE, check_in, ?) / 60, 2), status = 'PENDING' WHERE id = ?",
+        [clientDateTime, clientDateTime, attendance.id],
       );
     }
 

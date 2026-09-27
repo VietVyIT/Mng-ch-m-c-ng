@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.routes.js';
 import faceRoutes from './routes/face.routes.js';
 import attendanceRoutes from './routes/attendance.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import shiftsRoutes from './routes/shifts.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +52,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/face', faceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/shifts', shiftsRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 if (env.nodeEnv === 'production') {
