@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 
 const configuredApiUrl = import.meta.env.VITE_API_URL;
-const apiUrl = configuredApiUrl || (import.meta.env.PROD ? '/api' : 'http://localhost:5000/api');
+const apiUrl = configuredApiUrl || (import.meta.env.PROD ? '/api' : `http://${window.location.hostname}:5000/api`);
 
 if (import.meta.env.PROD && !configuredApiUrl) {
   console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
