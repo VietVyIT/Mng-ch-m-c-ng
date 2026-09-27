@@ -185,9 +185,21 @@ async function createAttendanceEvent(request, eventType, response) {
     }
 
     const now = new Date();
+    const clientTimeStr = request.body.client_time || null;
+    let nowMinutes = getVietnamMinutes(now);
+
+    if (clientTimeStr) {
+      const parts = clientTimeStr.split(':');
+      if (parts.length >= 2) {
+        const clientHours = parseInt(parts[0], 10);
+        const clientMinutes = parseInt(parts[1], 10);
+        if (!isNaN(clientHours) && !isNaN(clientMinutes)) {
+          nowMinutes = clientHours * 60 + clientMinutes;
+        }
+      }
+    }
     
     if (eventType === 'CHECK_OUT') {
-      const nowMinutes = getVietnamMinutes(now);
       const [endHour, endMinute] = shift.end.split(':').map(Number);
       const endMinutes = endHour * 60 + endMinute;
       if (nowMinutes < endMinutes) {
@@ -196,11 +208,21 @@ async function createAttendanceEvent(request, eventType, response) {
       }
     }
 
-    const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
 
     if (!attendance) {
-      checkInLateInfo = checkLateStatus(shift, now);
+      // Calculate late status manually using nowMinutes (client time)
+      const [startHour, startMinute] = shift.start.split(':').map(Number);
+      const startMinutes = startHour * 60 + startMinute;
+      const diffMinutes = Math.max(0, nowMinutes - startMinutes);
+      const isLate = diffMinutes > 10;
+      
+      checkInLateInfo = {
+        isLate,
+        punctualityStatus: isLate ? 'LATE' : 'ON_TIME',
+        lateMinutes: isLate ? diffMinutes : 0
+      };
+
       const [insert] = await connection.execute(
         `INSERT INTO attendance
          (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, is_late, late_minutes, face_verified)

@@ -544,7 +544,8 @@ function AdminAttendanceWorkArea({ user }) {
       localStorage.setItem('attendance_user', JSON.stringify({ ...user, faceRegistered: true }));
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData }) });
+    const client_time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -734,7 +735,8 @@ function UserPortal({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData }) });
+    const client_time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, client_time }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -1058,10 +1060,11 @@ function AdminDashboard({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
+    const client_time = new Date().toLocaleTimeString('en-GB', { hour12: false });
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ embedding, imageData }),
+      body: JSON.stringify({ embedding, imageData, client_time }),
     });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
