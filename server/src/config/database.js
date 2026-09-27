@@ -43,6 +43,13 @@ export async function checkDatabaseConnection() {
       `);
       console.log("Đã khởi tạo dữ liệu mẫu cho bảng shifts!");
     }
+    try {
+      await connection.query('ALTER TABLE attendance MODIFY COLUMN check_in_image LONGTEXT');
+      await connection.query('ALTER TABLE attendance MODIFY COLUMN check_out_image LONGTEXT');
+      await connection.query('ALTER TABLE attendance_events MODIFY COLUMN image LONGTEXT');
+      console.log('Đã cập nhật image columns thành LONGTEXT');
+    } catch(e) { }
+    }
   } catch (err) {
     console.error("Lỗi khởi tạo schema MySQL:", err.message);
   } finally {
