@@ -1,6 +1,6 @@
-﻿import express from 'express';
+import express from 'express';
 import db from '../config/database.js';
-import authenticate from '../middlewares/auth.middleware.js';
+import { authenticate } from '../middlewares/auth.middleware.js';
 
 const router = express.Router();
 
