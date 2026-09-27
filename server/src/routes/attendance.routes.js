@@ -155,99 +155,96 @@ router.get('/:id/image/:type', authenticate, async (request, response, next) => 
 });
 
 async function createAttendanceEvent(request, eventType, response) {
-  const image = parseImage(request.body.imageData);
-  if (!image) {
-    return response.status(400).json({ success: false, message: 'Ảnh sau khi nén phải nhỏ hơn hoặc bằng 30KB.', errorCode: 'INVALID_IMAGE_SIZE' });
-  }
-  // if (!(await verifyUserFace(request.user.userId, request.body.embedding))) {
-  //   return response.status(403).json({ success: false, message: 'Khuôn mặt không khớp.', errorCode: 'FACE_NOT_MATCH' });
-  // }
-
-  const shiftData = await getTodayShift();
-  const shift = getCurrentShift(new Date(), shiftData);
-  if (!shift) return response.status(409).json({ success: false, message: 'Hiện không có ca làm việc nào được bật.', errorCode: 'NO_ENABLED_SHIFT' });
-
-  const connection = await pool.getConnection();
-  try {
-    await connection.beginTransaction();
-
-    const clientDateStr = request.body.client_date || new Date().toISOString().split('T')[0];
-    const clientTimeStr = request.body.client_time || null;
-    const clientDateTime = `${clientDateStr} ${clientTimeStr || '00:00:00'}`;
-
-    const [rows] = await connection.execute(
-      'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = ? AND shift_code = ? FOR UPDATE',
-      [request.user.userId, clientDateStr, shift.code],
-    );
-    let attendance = rows[0];
-    if (eventType === 'CHECK_IN' && attendance?.check_in) {
-      await connection.rollback();
-      return response.status(409).json({ success: false, message: 'Bạn đã check-in hôm nay.', errorCode: 'ALREADY_CHECKED_IN' });
-    }
-    if (eventType === 'CHECK_OUT' && (!attendance?.check_in || attendance?.check_out)) {
-      await connection.rollback();
-      return response.status(409).json({ success: false, message: attendance?.check_out ? 'Bạn đã check-out hôm nay.' : 'Bạn chưa check-in hôm nay.', errorCode: 'CHECK_IN_REQUIRED' });
+    const rawImageData = request.body.imageData;
+    if (!rawImageData || !rawImageData.startsWith('data:image/')) {
+      return response.status(400).json({ success: false, message: 'Ảnh chụp không hợp lệ.', errorCode: 'INVALID_IMAGE' });
     }
 
-    const now = new Date();
-    let nowMinutes = getVietnamMinutes(now);
+    const shiftData = await getTodayShift();
+    const shift = getCurrentShift(new Date(), shiftData);
+    if (!shift) return response.status(409).json({ success: false, message: 'Hiện không có ca làm việc nào được bật.', errorCode: 'NO_ENABLED_SHIFT' });
 
-    if (clientTimeStr) {
-      const parts = clientTimeStr.split(':');
-      if (parts.length >= 2) {
-        const clientHours = parseInt(parts[0], 10);
-        const clientMinutes = parseInt(parts[1], 10);
-        if (!isNaN(clientHours) && !isNaN(clientMinutes)) {
-          nowMinutes = clientHours * 60 + clientMinutes;
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const clientDateStr = request.body.client_date || new Date().toISOString().split('T')[0];
+      const clientTimeStr = request.body.client_time || null;
+      const clientDateTime = `${clientDateStr} ${clientTimeStr || '00:00:00'}`;
+
+      const [rows] = await connection.execute(
+        'SELECT id, check_in, check_out FROM attendance WHERE user_id = ? AND attendance_date = ? AND shift_code = ? FOR UPDATE',
+        [request.user.userId, clientDateStr, shift.code],
+      );
+      let attendance = rows[0];
+      if (eventType === 'CHECK_IN' && attendance?.check_in) {
+        await connection.rollback();
+        return response.status(409).json({ success: false, message: 'Bạn đã check-in hôm nay.', errorCode: 'ALREADY_CHECKED_IN' });
+      }
+      if (eventType === 'CHECK_OUT' && (!attendance?.check_in || attendance?.check_out)) {
+        await connection.rollback();
+        return response.status(409).json({ success: false, message: attendance?.check_out ? 'Bạn đã check-out hôm nay.' : 'Bạn chưa check-in hôm nay.', errorCode: 'CHECK_IN_REQUIRED' });
+      }
+
+      const now = new Date();
+      let nowMinutes = getVietnamMinutes(now);
+
+      if (clientTimeStr) {
+        const parts = clientTimeStr.split(':');
+        if (parts.length >= 2) {
+          const clientHours = parseInt(parts[0], 10);
+          const clientMinutes = parseInt(parts[1], 10);
+          if (!isNaN(clientHours) && !isNaN(clientMinutes)) {
+            nowMinutes = clientHours * 60 + clientMinutes;
+          }
         }
       }
-    }
-    
-    if (eventType === 'CHECK_OUT') {
-      const [endHour, endMinute] = shift.end.split(':').map(Number);
-      const endMinutes = endHour * 60 + endMinute;
-      if (nowMinutes < endMinutes) {
-        await connection.rollback();
-        return response.status(400).json({ success: false, message: `Chưa đến giờ kết thúc ca làm việc (${shift.end}). Bạn không thể check-out trước giờ!`, errorCode: 'TOO_EARLY_CHECKOUT' });
-      }
-    }
-
-    let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
-
-    if (!attendance) {
-      // Calculate late status manually using nowMinutes (client time)
-      const [startHour, startMinute] = shift.start.split(':').map(Number);
-      const startMinutes = startHour * 60 + startMinute;
-      const diffMinutes = Math.max(0, nowMinutes - startMinutes);
-      const isLate = diffMinutes > 10;
       
-      checkInLateInfo = {
-        isLate,
-        punctualityStatus: isLate ? 'LATE' : 'ON_TIME',
-        lateMinutes: isLate ? diffMinutes : 0
-      };
+      if (eventType === 'CHECK_OUT') {
+        const [endHour, endMinute] = shift.end.split(':').map(Number);
+        const endMinutes = endHour * 60 + endMinute;
+        if (nowMinutes < endMinutes) {
+          await connection.rollback();
+          return response.status(400).json({ success: false, message: `Chưa đến giờ kết thúc ca làm việc (${shift.end}). Bạn không thể check-out trước giờ!`, errorCode: 'TOO_EARLY_CHECKOUT' });
+        }
+      }
 
-      const [insert] = await connection.execute(
-        `INSERT INTO attendance
-         (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, is_late, late_minutes, face_verified)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, TRUE)`,
-        [request.user.userId, clientDateStr, shift.code, shift.name, shift.start, shift.end, clientDateTime, checkInLateInfo.punctualityStatus, checkInLateInfo.isLate, checkInLateInfo.lateMinutes],
-      );
-      attendance = { id: insert.insertId, check_in: true };
-    } else if (eventType === 'CHECK_OUT') {
+      let checkInLateInfo = { isLate: false, punctualityStatus: 'ON_TIME', lateMinutes: 0 };
+
+      if (!attendance) {
+        // Calculate late status manually using nowMinutes (client time)
+        const [startHour, startMinute] = shift.start.split(':').map(Number);
+        const startMinutes = startHour * 60 + startMinute;
+        const diffMinutes = Math.max(0, nowMinutes - startMinutes);
+        const isLate = diffMinutes > 10;
+        
+        checkInLateInfo = {
+          isLate,
+          punctualityStatus: isLate ? 'LATE' : 'ON_TIME',
+          lateMinutes: isLate ? diffMinutes : 0
+        };
+
+        const [insert] = await connection.execute(
+          `INSERT INTO attendance
+           (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, status, punctuality_status, is_late, late_minutes, face_verified)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, TRUE)`,
+          [request.user.userId, clientDateStr, shift.code, shift.name, shift.start, shift.end, clientDateTime, checkInLateInfo.punctualityStatus, checkInLateInfo.isLate, checkInLateInfo.lateMinutes],
+        );
+        attendance = { id: insert.insertId, check_in: true };
+      } else if (eventType === 'CHECK_OUT') {
+        await connection.execute(
+          "UPDATE attendance SET check_out = ?, check_out_image = ?, total_hours = ROUND(TIMESTAMPDIFF(MINUTE, check_in, ?) / 60, 2), status = 'PENDING' WHERE id = ?",
+          [clientDateTime, rawImageData, clientDateTime, attendance.id],
+        );
+      }
+
       await connection.execute(
-        "UPDATE attendance SET check_out = ?, total_hours = ROUND(TIMESTAMPDIFF(MINUTE, check_in, ?) / 60, 2), status = 'PENDING' WHERE id = ?",
-        [clientDateTime, clientDateTime, attendance.id],
+        `INSERT INTO attendance_events
+         (attendance_id, user_id, event_type, image, image_mime, face_verified, is_late, punctuality_status, status)
+         VALUES (?, ?, ?, ?, 'image/jpeg', TRUE, ?, ?, 'PENDING')`,
+        [attendance.id, request.user.userId, eventType, rawImageData, checkInLateInfo.isLate, checkInLateInfo.punctualityStatus],
       );
-    }
-
-    await connection.execute(
-      `INSERT INTO attendance_events
-       (attendance_id, user_id, event_type, image, image_mime, face_verified, is_late, punctuality_status, status)
-       VALUES (?, ?, ?, ?, ?, TRUE, ?, ?, 'PENDING')`,
-      [attendance.id, request.user.userId, eventType, image.buffer, image.mime, checkInLateInfo.isLate, checkInLateInfo.punctualityStatus],
-    );
-    await connection.commit();
+      await connection.commit();
 
     let responseMessage = 'Đã gửi yêu cầu chấm công thành công! Vui lòng chờ quản trị viên phê duyệt.';
 
@@ -279,7 +276,8 @@ router.post('/check-in', authenticate, async (request, response, next) => {
   try {
     return await createAttendanceEvent(request, 'CHECK_IN', response);
   } catch (error) {
-    return next(error);
+    console.error("Check-in error:", error);
+    return response.status(500).json({ success: false, message: 'Lỗi server: ' + (error.message || 'Không xác định') });
   }
 });
 
@@ -287,7 +285,8 @@ router.post('/check-out', authenticate, async (request, response, next) => {
   try {
     return await createAttendanceEvent(request, 'CHECK_OUT', response);
   } catch (error) {
-    return next(error);
+    console.error("Check-out error:", error);
+    return response.status(500).json({ success: false, message: 'Lỗi server: ' + (error.message || 'Không xác định') });
   }
 });
 
