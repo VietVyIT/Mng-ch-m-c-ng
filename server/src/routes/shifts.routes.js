@@ -3,35 +3,29 @@ import { pool } from '../config/database.js';
 
 const router = express.Router();
 
-router.get('/', async (request, response) => {
+router.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute('SELECT id, name, start_time, end_time, is_active FROM shifts ORDER BY FIELD(id, "MORNING", "AFTERNOON", "EVENING")');
-    if (!rows || rows.length === 0) {
-      throw new Error('Empty database table');
-    }
+    if (!rows.length) throw new Error('Không tìm thấy ca làm việc nào trong hệ thống.');
     return response.json({ success: true, data: rows });
   } catch (error) {
-    return response.json({
-      success: true,
-      data: [
-        { id: 'MORNING', name: 'Ca Sáng', start_time: '07:30', end_time: '12:00', is_active: true },
-        { id: 'AFTERNOON', name: 'Ca Chiều', start_time: '13:30', end_time: '17:30', is_active: true },
-        { id: 'EVENING', name: 'Ca Tối', start_time: '18:00', end_time: '20:00', is_active: false }
-      ]
-    });
+    return next(error);
   }
 });
 
-router.put('/:id', async (request, response) => {
+router.put('/:id', async (request, response, next) => {
   try {
     const { name, start_time, end_time, is_active } = request.body;
-    await pool.execute(
+    const [result] = await pool.execute(
       'UPDATE shifts SET name = ?, start_time = ?, end_time = ?, is_active = ? WHERE id = ?',
       [name, start_time, end_time, is_active ? 1 : 0, request.params.id]
     );
+    if (!result.affectedRows) {
+      return response.status(404).json({ success: false, message: 'Không tìm thấy ca làm việc.' });
+    }
     return response.json({ success: true, message: 'Cập nhật thành công' });
   } catch (error) {
-    return response.status(500).json({ success: false, message: 'Lỗi server' });
+    return next(error);
   }
 });
 

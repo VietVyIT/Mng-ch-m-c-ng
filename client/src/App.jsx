@@ -40,6 +40,26 @@ import {
 const configuredApiUrl = import.meta.env.VITE_API_URL;
 const apiUrl = configuredApiUrl || (import.meta.env.PROD ? '/api' : `http://${window.location.hostname}:5000/api`);
 
+function getVietnamDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const part = (type) => parts.find((item) => item.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function formatShiftName(shift) {
+  const standardNames = {
+    MORNING: 'Ca sáng',
+    AFTERNOON: 'Ca chiều',
+    EVENING: 'Ca tối',
+  };
+  return standardNames[shift?.code || shift?.id] || shift?.name || 'Ca làm việc';
+}
+
 if (import.meta.env.PROD && !configuredApiUrl) {
   console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
 }
@@ -50,23 +70,28 @@ function useRealtimeShift(shiftSettings) {
   useEffect(() => {
     function updateShift() {
       const now = new Date();
-      const totalMinutes = now.getHours() * 60 + now.getMinutes();
-      
-      if (totalMinutes >= 0 && totalMinutes <= 720 && shiftSettings?.morningEnabled !== false) {
-        setCurrentShift({ code: 'MORNING', name: 'CA SÁNG', start: '07:30:00', end: '12:00:00' });
-      } else if (totalMinutes > 720 && totalMinutes <= 1050 && shiftSettings?.afternoonEnabled !== false) {
-        setCurrentShift({ code: 'AFTERNOON', name: 'CA CHIỀU', start: '13:30:00', end: '17:30:00' });
-      } else if (totalMinutes > 1050 && totalMinutes <= 1440 && shiftSettings?.eveningEnabled !== false) {
-        setCurrentShift({ code: 'EVENING', name: 'CA TỐI', start: '18:00:00', end: '20:00:00' });
-      } else {
-        setCurrentShift(null);
-      }
+      const [hours, minutes] = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Ho_Chi_Minh',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(now).split(':').map(Number);
+      const totalMinutes = hours * 60 + minutes;
+      const parseMinutes = (time) => {
+        const [hour = 0, minute = 0] = String(time || '').split(':').map(Number);
+        return hour * 60 + minute;
+      };
+      const availableShifts = shiftSettings?.shifts || [];
+      const activeShift = availableShifts.find((shift) => (
+        totalMinutes >= parseMinutes(shift.start) && totalMinutes < parseMinutes(shift.end)
+      ));
+      setCurrentShift(activeShift || null);
     }
     
     updateShift();
     const interval = setInterval(updateShift, 30000);
     return () => clearInterval(interval);
-  }, [shiftSettings?.morningEnabled, shiftSettings?.afternoonEnabled, shiftSettings?.eveningEnabled]);
+  }, [shiftSettings]);
 
   return currentShift;
 }
@@ -507,6 +532,9 @@ function AdminAttendanceWorkArea({ user }) {
   const [checkedIn, setCheckedIn] = useState(false);
   const [error, setError] = useState('');
   const [checkInFeedback, setCheckInFeedback] = useState(null);
+  const canAttend = checkedIn
+    ? Boolean(today?.shift_code && realtimeShift?.code === today.shift_code)
+    : Boolean(realtimeShift);
 
   async function loadAttendance() {
     const token = localStorage.getItem('attendance_token');
@@ -527,7 +555,22 @@ function AdminAttendanceWorkArea({ user }) {
 
   useEffect(() => {
     loadAttendance().catch((requestError) => setError(requestError.message));
+    const shiftRefresh = window.setInterval(() => {
+      const token = localStorage.getItem('attendance_token');
+      fetch(`${apiUrl}/attendance/shifts/today`, { headers: { Authorization: `Bearer ${token}` } })
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Không thể cập nhật trạng thái ca.');
+          const body = await response.json();
+          setShiftData(body.data || null);
+        })
+        .catch((requestError) => setError(requestError.message));
+    }, 8000);
+    return () => window.clearInterval(shiftRefresh);
   }, []);
+
+  useEffect(() => {
+    if (!canAttend) setFaceModal(false);
+  }, [canAttend]);
 
   async function handleFaceSuccess(embedding, imageData) {
     const token = localStorage.getItem('attendance_token');
@@ -540,11 +583,9 @@ function AdminAttendanceWorkArea({ user }) {
       localStorage.setItem('attendance_user', JSON.stringify({ ...user, faceRegistered: true }));
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
-    const client_date = new Date().toLocaleDateString("en-CA");
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: realtimeShift?.code || 'MORNING', mssv: user?.mssv, fullName: user?.fullName || user?.name, client_time, client_date }) });
+    const shiftCode = checkedIn ? today?.shift_code : realtimeShift?.code;
+    if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -585,8 +626,8 @@ function AdminAttendanceWorkArea({ user }) {
 
     <div className="attendance-work-grid">
       <div className="content-panel shift-status-card">
-        <div className="panel-heading"><div><h3>Ca làm việc & trạng thái</h3><p>Ca tối chỉ hiển thị khi Admin bật.</p></div></div>
-        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === realtimeShift?.code ? 'active' : ''}`}><div><strong>{shift.name}</strong><small>{formatDisplayTime(shift.start)} — {formatDisplayTime(shift.end)}</small></div>{shift.code === realtimeShift?.code && <span>ĐANG DIỄN RA</span>}</div>)}</div>
+        <div className="panel-heading"><div><h3>Ca làm việc & trạng thái</h3><p>{canAttend ? `${formatShiftName(realtimeShift)} đang mở` : shiftData?.shifts?.length ? 'Chưa đến giờ ca đang mở.' : 'Tất cả ca đang tắt.'}</p></div></div>
+        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === realtimeShift?.code ? 'active' : ''}`}><div><strong>{formatShiftName(shift)}</strong><small>{formatDisplayTime(shift.start)} — {formatDisplayTime(shift.end)}</small></div>{shift.code === realtimeShift?.code && <span>ĐANG DIỄN RA</span>}</div>)}</div>
         <div className="attendance-status-card">
           <div><span>Trạng thái</span><strong>{statusLabel}</strong></div>
           <div className="attendance-time-row">
@@ -603,11 +644,8 @@ function AdminAttendanceWorkArea({ user }) {
         <div className="panel-heading"><div><h3>Face ID Action</h3><p>Chụp ảnh nén để xác thực chấm công.</p></div><Camera size={20} /></div>
         <div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>
         {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
-<button className="checkout-button face-action"  onClick={() => {
-  if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
-  setFaceModal(true);
-}}>
-<Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
+<button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
+<Camera size={17} />{!canAttend ? shiftData?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT' : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
 </button>}
         <small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small>
       </div>
@@ -693,6 +731,9 @@ function UserPortal({ user }) {
   const [today, setToday] = useState(null);
   const [shift, setShift] = useState(null);
   const realtimeShift = useRealtimeShift(shift);
+  const canAttend = checkedIn
+    ? Boolean(today?.shift_code && realtimeShift?.code === today.shift_code)
+    : Boolean(realtimeShift);
   const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
 
@@ -709,7 +750,36 @@ function UserPortal({ user }) {
       setShift(shiftBody.data || null);
       setRecords(historyBody.data || []);
     }).catch(() => {});
+    const shiftRefresh = window.setInterval(() => {
+      const currentToken = localStorage.getItem('attendance_token');
+      const currentHeaders = { Authorization: `Bearer ${currentToken}` };
+      Promise.all([
+        fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers: currentHeaders }),
+        fetch(`${apiUrl}/attendance/today`, { cache: 'no-store', headers: currentHeaders }),
+        fetch(`${apiUrl}/attendance/my`, { cache: 'no-store', headers: currentHeaders }),
+      ])
+        .then(async ([shiftResponse, todayResponse, historyResponse]) => {
+          if (!shiftResponse.ok || !todayResponse.ok || !historyResponse.ok) {
+            throw new Error('Không thể cập nhật trạng thái và lịch sử chấm công.');
+          }
+          const [shiftBody, todayBody, historyBody] = await Promise.all([
+            shiftResponse.json(),
+            todayResponse.json(),
+            historyResponse.json(),
+          ]);
+          setShift(shiftBody.data || null);
+          setToday(todayBody.data || null);
+          setCheckedIn(Boolean(todayBody.data?.check_in && !todayBody.data?.check_out));
+          setRecords(historyBody.data || []);
+        })
+        .catch((requestError) => console.error('Không thể cập nhật trạng thái ca:', requestError));
+    }, 8000);
+    return () => window.clearInterval(shiftRefresh);
   }, []);
+
+  useEffect(() => {
+    if (!canAttend) setFaceModal(false);
+  }, [canAttend]);
 
   async function handleFaceSuccess(embedding, imageData) {
     const token = localStorage.getItem('attendance_token');
@@ -723,11 +793,9 @@ function UserPortal({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
-    const client_date = new Date().toLocaleDateString("en-CA");
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: realtimeShift?.code || 'MORNING', mssv: user?.mssv, fullName: user?.fullName || user?.name, client_time, client_date }) });
+    const shiftCode = checkedIn ? today?.shift_code : realtimeShift?.code;
+    if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
 
@@ -775,11 +843,8 @@ function UserPortal({ user }) {
     <span className="overview-label">TỔNG QUAN CÁ NHÂN</span>
     <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
     <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
-<button className="checkout-button face-action"  onClick={() => {
-  if (!checkedIn && !realtimeShift) { alert('Hiện tại không có ca làm việc nào đang mở.'); return; }
-  setFaceModal(true);
-}}>
-<Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+<button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
+<Camera size={16} /> {!canAttend ? shift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT' : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
 </button>
 </div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
@@ -794,22 +859,42 @@ function AttendanceHistory({ user }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [deleteReason, setDeleteReason] = useState('');
   useEffect(() => {
-    const token = localStorage.getItem('attendance_token');
     const endpoint = user.role === 'ADMIN' ? '/admin/attendance' : '/attendance/my';
-    fetch(`${apiUrl}${endpoint}`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(async (response) => {
+    let cancelled = false;
+    async function loadRecords() {
+      const token = localStorage.getItem('attendance_token');
+      try {
+        const response = await fetch(`${apiUrl}${endpoint}`, {
+          cache: 'no-store',
+          headers: { Authorization: `Bearer ${token}` },
+        });
         const body = await response.json();
         if (!response.ok || !body.success) throw new Error(body.message || 'Không thể tải lịch sử.');
-        setRecords(body.data || []);
-      })
-      .catch((requestError) => setError(requestError.message));
+        if (!cancelled) {
+          setRecords(body.data || []);
+          setError('');
+        }
+      } catch (requestError) {
+        if (!cancelled) setError(requestError.message);
+      }
+    }
+    void loadRecords();
+    const refreshInterval = user.role === 'USER'
+      ? window.setInterval(() => { void loadRecords(); }, 8000)
+      : null;
+    return () => {
+      cancelled = true;
+      if (refreshInterval !== null) window.clearInterval(refreshInterval);
+    };
   }, [user.role]);
 
   async function openPhoto(record, type) {
     const token = localStorage.getItem('attendance_token');
     const endpoint = user.role === 'ADMIN'
-      ? `${apiUrl}/admin/attendance/${record.id}/image/${type}`
-      : `${apiUrl}/attendance/${record.id}/image/${type}`;
+      ? record.source === 'Camera Request'
+        ? `${apiUrl}/admin/attendance-requests/${encodeURIComponent(`legacy:${type === 'check-out' ? 'CHECK_OUT' : 'CHECK_IN'}:${record.id}`)}/image`
+        : `${apiUrl}/admin/attendance/${record.id}/image/${type}`
+      : `${apiUrl}/attendance/${record.id}/image/${type}?source=${encodeURIComponent(record.source || 'Camera Request')}`;
     const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) return;
     const result = await response.json();
@@ -823,7 +908,9 @@ function AttendanceHistory({ user }) {
       const token = localStorage.getItem('attendance_token');
       const deleteEndpoint = record.source === 'Excel Import'
         ? `${apiUrl}/admin/imported-attendance/records/${record.id}`
-        : `${apiUrl}/admin/attendance/${record.id}`;
+        : record.source === 'Camera Request'
+          ? `${apiUrl}/admin/attendance-logs/${record.id}`
+          : `${apiUrl}/admin/attendance/${record.id}`;
       const response = await fetch(deleteEndpoint, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -831,7 +918,9 @@ function AttendanceHistory({ user }) {
       });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể xóa bản ghi.');
-      setRecords((current) => current.filter((item) => item.id !== record.id));
+      setRecords((current) => current.filter((item) => (
+        item.id !== record.id || item.source !== record.source
+      )));
       setDeleteTarget(null);
       setDeleteReason('');
     } catch (requestError) {
@@ -841,7 +930,7 @@ function AttendanceHistory({ user }) {
     }
   }
 
-  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử và ảnh chấm công của chính mình.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 7 : 6} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPreview(null)}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
+  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử chấm công của chính mình, gồm dữ liệu camera và Excel.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Nguồn</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.source || 'attendance'}-${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{record.source === 'Excel Import' ? 'Excel' : 'Camera'}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 8 : 7} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPreview(null)}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
 }
 
 function AdminDashboard({ user }) {
@@ -849,17 +938,21 @@ function AdminDashboard({ user }) {
   const [checkedIn, setCheckedIn] = useState(false);
   const [latestAttendance, setLatestAttendance] = useState(null);
   const [approvals, setApprovals] = useState([]);
-  const [shiftSettings, setShiftSettings] = useState({ morningEnabled: true, afternoonEnabled: true, eveningEnabled: true });
-  const realtimeShift = useRealtimeShift(shiftSettings);
   const [todayShift, setTodayShift] = useState(null);
+  const realtimeShift = useRealtimeShift(todayShift);
   const [photoPreview, setPhotoPreview] = useState(null);
   const [showAllModal, setShowAllModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [approvalConfirm, setApprovalConfirm] = useState(null);
+  const [actionNotice, setActionNotice] = useState(null);
   const [dashboardStats, setDashboardStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [chartRange, setChartRange] = useState('7days');
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().slice(0, 10));
+  const [selectedDate, setSelectedDate] = useState(getVietnamDateString);
   const hasAttendanceData = dashboardStats?.trend?.some((d) => d.onTime > 0 || d.late > 0);
+  const canAttend = checkedIn
+    ? Boolean(latestAttendance?.shift_code && realtimeShift?.code === latestAttendance.shift_code)
+    : Boolean(realtimeShift);
   const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     day: '2-digit',
@@ -873,13 +966,24 @@ function AdminDashboard({ user }) {
       const response = await fetch(`${apiUrl}/admin/attendance-requests?filter=all`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!response.ok) throw new Error('Không thể tải danh sách yêu cầu duyệt.');
       const body = await response.json();
-      if (body.success && Array.isArray(body.data)) {
-        setApprovals(body.data);
-      }
+      if (!body.success || !Array.isArray(body.data)) throw new Error(body.message || 'Dữ liệu yêu cầu duyệt không hợp lệ.');
+      setApprovals(body.data);
     } catch (err) {
       console.error('Lỗi tải danh sách duyệt:', err);
     }
+  }
+
+  async function loadActiveShifts() {
+    const token = localStorage.getItem('attendance_token');
+    const response = await fetch(`${apiUrl}/attendance/shifts/today`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw new Error('Không thể tải trạng thái ca làm.');
+    const body = await response.json();
+    if (!body.success || !body.data) throw new Error(body.message || 'Dữ liệu ca làm không hợp lệ.');
+    setTodayShift(body.data);
   }
 
   async function loadDashboardStats(range = chartRange, date = selectedDate) {
@@ -908,6 +1012,12 @@ function AdminDashboard({ user }) {
   }
 
   useEffect(() => {
+    const approvalPoll = user.role === 'ADMIN'
+      ? window.setInterval(() => { void loadApprovals(); }, 8000)
+      : null;
+    const shiftPoll = user.role === 'ADMIN'
+      ? window.setInterval(() => { loadActiveShifts().catch((err) => console.error('Lỗi tải trạng thái ca:', err)); }, 8000)
+      : null;
     const token = localStorage.getItem('attendance_token');
     fetch(`${apiUrl}/attendance/today`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (response) => {
@@ -919,42 +1029,70 @@ function AdminDashboard({ user }) {
         setCheckedIn(Boolean(body.data?.check_in && !body.data?.check_out));
       })
       .catch(() => setCheckedIn(false));
-    fetch(`${apiUrl}/attendance/shifts/today`, { headers: { Authorization: `Bearer ${token}` } })
-      .then((response) => response.json())
-      .then((body) => setTodayShift(body.data))
-      .catch(() => setTodayShift(null));
+    loadActiveShifts().catch((err) => console.error('Lỗi tải trạng thái ca:', err));
     if (user.role === 'ADMIN') {
-      Promise.all([
-        fetch(`${apiUrl}/admin/attendance-requests?filter=all`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.json()),
-        fetch(`${apiUrl}/admin/shifts/${new Date().toISOString().slice(0, 10)}`, { headers: { Authorization: `Bearer ${token}` } }).then((response) => response.json()),
-      ]).then(([approvalBody, shiftBody]) => {
+      fetch(`${apiUrl}/admin/attendance-requests?filter=all`, { headers: { Authorization: `Bearer ${token}` } })
+        .then((response) => response.json())
+        .then((approvalBody) => {
         setApprovals(approvalBody.data || []);
-        if (shiftBody.data) {
-          setShiftSettings({
-            morningEnabled: shiftBody.data.morningEnabled !== false,
-            afternoonEnabled: shiftBody.data.afternoonEnabled !== false,
-            eveningEnabled: shiftBody.data.eveningEnabled !== false,
-          });
-        }
-      }).catch(() => {});
+        })
+        .catch((err) => console.error('Lỗi tải danh sách duyệt:', err));
       loadDashboardStats();
     }
+    return () => {
+      if (approvalPoll !== null) window.clearInterval(approvalPoll);
+      if (shiftPoll !== null) window.clearInterval(shiftPoll);
+    };
   }, []);
 
   const [rejectTarget, setRejectTarget] = useState(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectLoading, setRejectLoading] = useState(false);
+  const [processingId, setProcessingId] = useState(null);
 
-  async function reviewApproval(eventId, status, reason = '') {
-    const token = localStorage.getItem('attendance_token');
-    const response = await fetch(`${apiUrl}/admin/attendance-requests/${eventId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ status, reason }),
-    });
-    const body = await response.json();
-    if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật yêu cầu.');
-    setApprovals((current) => current.filter((item) => item.event_id !== eventId));
+  function getAttendanceId(record) {
+    return record?.event_id || record?.id || record?._id;
+  }
+
+  async function reviewApproval(requestKey, status, reason = '') {
+    const attendanceId = requestKey?.request_key || requestKey?.event_id || requestKey?.id || requestKey?._id || requestKey;
+    if (!attendanceId) {
+      console.warn('Missing attendance ID');
+      setActionNotice({ title: 'Không thể xử lý', message: 'Không tìm thấy ID bản ghi chấm công.' });
+      return false;
+    }
+    setProcessingId(attendanceId);
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/admin/attendance-requests/${attendanceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ status, reason }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật yêu cầu.');
+      setApprovals((current) => current.filter((item) => getAttendanceId(item) !== attendanceId && item.request_key !== attendanceId));
+      return true;
+    } catch (err) {
+      setActionNotice({ title: 'Không thể cập nhật', message: err.message || 'Lỗi mạng khi xử lý duyệt công.' });
+      return false;
+    } finally {
+      setProcessingId(null);
+    }
+  }
+
+  function requestApproval(event) {
+    setApprovalConfirm({ type: 'single', event });
+  }
+
+  async function handleConfirmApproval() {
+    if (!approvalConfirm) return;
+    if (approvalConfirm.type === 'single') {
+      await reviewApproval(approvalConfirm.event, 'APPROVED');
+      setApprovalConfirm(null);
+      return;
+    }
+    await handleApproveAll(approvalConfirm.filter, true);
   }
 
   function openRejectModal(event) {
@@ -966,19 +1104,22 @@ function AdminDashboard({ user }) {
     if (!rejectTarget) return;
     setRejectLoading(true);
     try {
-      await reviewApproval(rejectTarget.event_id, 'REJECTED', rejectReason.trim());
-      setRejectTarget(null);
-      setRejectReason('');
-    } catch (err) {
-      alert(err.message || 'Lỗi khi từ chối yêu cầu.');
+      const succeeded = await reviewApproval(rejectTarget, 'REJECTED', rejectReason.trim());
+      if (succeeded) {
+        setRejectTarget(null);
+        setRejectReason('');
+      }
     } finally {
       setRejectLoading(false);
     }
   }
 
-  async function handleApproveAll(filterType = 'all') {
+  async function handleApproveAll(filterType = 'all', confirmed = false) {
     const label = filterType === 'late' ? 'yêu cầu đi làm trễ' : filterType === 'ontime' ? 'yêu cầu đúng giờ' : 'tất cả các yêu cầu';
-    if (!window.confirm(`Bạn có chắc chắn muốn phê duyệt ${label} đang chờ?`)) return;
+    if (!confirmed) {
+      setApprovalConfirm({ type: 'bulk', filter: filterType, label });
+      return;
+    }
     setActionLoading(true);
     try {
       const token = localStorage.getItem('attendance_token');
@@ -989,34 +1130,20 @@ function AdminDashboard({ user }) {
       });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể duyệt yêu cầu.');
-      alert(body.message || 'Đã duyệt thành công.');
+      setApprovalConfirm(null);
+      setActionNotice({ title: 'Đã duyệt thành công', message: body.message || 'Các yêu cầu đã được phê duyệt.' });
       await loadApprovals();
     } catch (err) {
-      alert(err.message);
+      setApprovalConfirm(null);
+      setActionNotice({ title: 'Không thể duyệt', message: err.message || 'Có lỗi khi duyệt yêu cầu.' });
     } finally {
       setActionLoading(false);
     }
   }
 
-  async function toggleShift(shiftCode) {
-    const nextSettings = { ...shiftSettings };
-    if (shiftCode === 'MORNING') nextSettings.morningEnabled = !shiftSettings.morningEnabled;
-    if (shiftCode === 'AFTERNOON') nextSettings.afternoonEnabled = !shiftSettings.afternoonEnabled;
-    if (shiftCode === 'EVENING') nextSettings.eveningEnabled = !shiftSettings.eveningEnabled;
-
+  async function previewApproval(requestKey) {
     const token = localStorage.getItem('attendance_token');
-    const response = await fetch(`${apiUrl}/admin/shifts/${new Date().toISOString().slice(0, 10)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(nextSettings),
-    });
-    if (!response.ok) throw new Error('Không thể cập nhật trạng thái ca làm việc.');
-    setShiftSettings(nextSettings);
-  }
-
-  async function previewApproval(eventId) {
-    const token = localStorage.getItem('attendance_token');
-    const response = await fetch(`${apiUrl}/admin/attendance-requests/${eventId}/image`, { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${apiUrl}/admin/attendance-requests/${requestKey}/image`, { headers: { Authorization: `Bearer ${token}` } });
     if (!response.ok) {
       alert('Không tìm thấy ảnh đối soát hoặc ảnh đã hết hạn lưu trữ.');
       return;
@@ -1040,14 +1167,12 @@ function AdminDashboard({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, '0');
-    const client_time = new Date().toLocaleTimeString("en-GB", { hour12: false });
-    const client_date = new Date().toLocaleDateString("en-CA");
+    const shiftCode = checkedIn ? latestAttendance?.shift_code : realtimeShift?.code;
+    if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: realtimeShift?.code || 'MORNING', mssv: user?.mssv, fullName: user?.fullName || user?.name, client_time, client_date }),
+      body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }),
     });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
@@ -1063,7 +1188,7 @@ function AdminDashboard({ user }) {
     <section className="metric-grid dark-metrics">
       <Metric icon={CalendarCheck} title="Tổng ngày công" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.totalWorkDays} công` : '0 công'} note={dashboardStats ? `${dashboardStats.totalStudents} sinh viên` : 'Đang tải...'} chart="gauge" />
       <Metric icon={Clock3} title="Tổng giờ" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.totalHours.toLocaleString('vi-VN')} giờ` : '0 giờ'} note="1 công = 8 giờ" chart="line" />
-      <Metric icon={BarChart3} title={selectedDate === new Date().toISOString().slice(0, 10) ? 'Đã chấm hôm nay' : `Chấm công ${new Date(selectedDate).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`} value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.todayCheckins}/${dashboardStats.totalStudents}` : '0/0'} note={dashboardStats && dashboardStats.totalStudents > 0 ? `${Math.round((dashboardStats.todayCheckins / dashboardStats.totalStudents) * 100)}% sinh viên` : 'Chưa có sinh viên'} chart="donut" />
+      <Metric icon={BarChart3} title={selectedDate === getVietnamDateString() ? 'Đã chấm hôm nay' : `Chấm công ${new Date(selectedDate).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`} value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.todayCheckins}/${dashboardStats.totalStudents}` : '0/0'} note={dashboardStats && dashboardStats.totalStudents > 0 ? `${Math.round((dashboardStats.todayCheckins / dashboardStats.totalStudents) * 100)}% sinh viên` : 'Chưa có sinh viên'} chart="donut" />
       <Metric icon={UsersRound} title="Chờ duyệt" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.pendingCount}` : '0'} note="Yêu cầu đang chờ xử lý" chart="user" />
     </section>
     <section className="dashboard-panels admin-panels">
@@ -1089,12 +1214,12 @@ function AdminDashboard({ user }) {
           </div>
           <div className="today-status">
             <div className="shift-time">
-              <span>{realtimeShift?.name?.toUpperCase() || 'CA SÁNG / CA CHIỀU'}</span>
+              <span>{realtimeShift ? formatShiftName(realtimeShift) : 'Ca làm việc'}</span>
               <strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : '07:30 — 12:00'}</strong>
             </div>
             <div className="status-line">
               <span>Ca khả dụng</span>
-              <strong>{todayShift?.shifts?.map((shift) => shift.name).join(' · ') || 'Ca sáng · Ca chiều'}</strong>
+              <strong>{todayShift?.shifts?.map(formatShiftName).join(' · ') || 'Không có ca đang mở'}</strong>
             </div>
             <div className="status-line">
               <span>Check-in</span>
@@ -1110,12 +1235,12 @@ function AdminDashboard({ user }) {
             </div>
             <button
               className="checkout-button face-action"
-              
+              disabled={!canAttend}
               onClick={() => {
-  setFaceModal(true);
+                setFaceModal(true);
               }}
             >
-              {checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+              {!canAttend ? todayShift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT' : checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -1128,11 +1253,6 @@ function AdminDashboard({ user }) {
         </div>
         {user.role === 'ADMIN' && (
           <div className="approval-heading-actions">
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button className={`shift-toggle ${shiftSettings.morningEnabled ? 'on' : ''}`} onClick={() => toggleShift('MORNING')}>Ca sáng {shiftSettings.morningEnabled ? 'BẬT' : 'TẮT'}</button>
-              <button className={`shift-toggle ${shiftSettings.afternoonEnabled ? 'on' : ''}`} onClick={() => toggleShift('AFTERNOON')}>Ca chiều {shiftSettings.afternoonEnabled ? 'BẬT' : 'TẮT'}</button>
-              <button className={`shift-toggle ${shiftSettings.eveningEnabled ? 'on' : ''}`} onClick={() => toggleShift('EVENING')}>Ca tối {shiftSettings.eveningEnabled ? 'BẬT' : 'TẮT'}</button>
-            </div>
             {approvals.length > 0 && (
               <button className="view-all-button" onClick={() => setShowAllModal(true)}>
                 Xem tất cả ({approvals.length})
@@ -1147,7 +1267,7 @@ function AdminDashboard({ user }) {
           <>
             <div className="approval-list">
               {approvals.slice(0, 5).map((item) => (
-                <ApprovalRow key={item.event_id} event={item} onPreview={() => previewApproval(item.event_id)} onReview={reviewApproval} onReject={openRejectModal} />
+                <ApprovalRow key={item.request_key || getAttendanceId(item)} event={item} onPreview={() => previewApproval(item.request_key || getAttendanceId(item))} onReview={requestApproval} onReject={openRejectModal} processingId={processingId} />
               ))}
             </div>
             {approvals.length > 5 && (
@@ -1178,11 +1298,33 @@ function AdminDashboard({ user }) {
         <AllRequestsModal
           requests={approvals}
           onClose={() => setShowAllModal(false)}
-          onReview={reviewApproval}
+          onReview={requestApproval}
           onReject={openRejectModal}
           onApproveAll={handleApproveAll}
           onPreview={previewApproval}
           actionLoading={actionLoading}
+          processingId={processingId}
+        />
+      )}
+    </AnimatePresence>
+    <AnimatePresence>
+      {approvalConfirm && (
+        <ApprovalConfirmationModal
+          event={approvalConfirm.event}
+          bulk={approvalConfirm.type === 'bulk'}
+          label={approvalConfirm.label}
+          loading={actionLoading || processingId !== null}
+          onConfirm={handleConfirmApproval}
+          onCancel={() => setApprovalConfirm(null)}
+        />
+      )}
+    </AnimatePresence>
+    <AnimatePresence>
+      {actionNotice && (
+        <ActionNoticeModal
+          title={actionNotice.title}
+          message={actionNotice.message}
+          onClose={() => setActionNotice(null)}
         />
       )}
     </AnimatePresence>
@@ -1782,15 +1924,16 @@ function AttendanceChart({ data, selectedDate, onDateSelect }) {
   return <div className="chart-canvas-wrap"><canvas ref={canvasRef} aria-label="Biểu đồ hoạt động chấm công" /></div>;
 }
 
-function ApprovalRow({ event, onPreview, onReview, onReject }) {
+function ApprovalRow({ event, onPreview, onReview, onReject, processingId }) {
+  const attendanceId = event?.request_key || event?.event_id || event?.id || event?._id;
   const isLate = Boolean(event.is_late || event.punctuality_status === 'LATE');
   const timeStr = event.captured_at
     ? new Date(event.captured_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
     : '--:--';
   return (
     <div className={`approval-row ${isLate ? 'row-late' : ''}`}>
-      {event.check_in_image ? (
-        <img src={event.check_in_image} alt="Minh chứng" className="approval-photo-img" onClick={() => onPreview(event.event_id)} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }} />
+      {event.check_in_image || event.check_out_image ? (
+        <img src={event.check_in_image || event.check_out_image} alt="Minh chứng" className="approval-photo-img" onClick={() => onPreview(attendanceId)} style={{ width: '40px', height: '40px', objectFit: 'cover', borderRadius: '4px', cursor: 'pointer', flexShrink: 0 }} />
       ) : (
         <div className="approval-photo-placeholder" style={{ width: '40px', height: '40px', background: '#eee', color: '#888', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '2px', flexShrink: 0 }}>Không có ảnh</div>
       )}
@@ -1817,14 +1960,14 @@ function ApprovalRow({ event, onPreview, onReview, onReject }) {
         )}
       </div>
       <div className="approval-actions">
-        <button className="approval-action approve" title="Duyệt" onClick={() => onReview(event.event_id, 'APPROVED')}>✓</button>
-        <button className="approval-action reject" title="Từ chối" onClick={() => onReject ? onReject(event) : onReview(event.event_id, 'REJECTED')}>×</button>
+        <button className="approval-action approve" title="Duyệt" disabled={processingId !== null} onClick={(e) => { e.stopPropagation(); onReview(event); }}>{attendanceId && processingId === attendanceId ? '...' : '✓'}</button>
+        <button className="approval-action reject" title="Từ chối" disabled={processingId !== null} onClick={(e) => { e.stopPropagation(); if (onReject) onReject(event); else void onReview(event, 'REJECTED'); }}>{attendanceId && processingId === attendanceId ? '...' : '×'}</button>
       </div>
     </div>
   );
 }
 
-function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll, onPreview, actionLoading }) {
+function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll, onPreview, actionLoading, processingId }) {
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -1923,7 +2066,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
                 <th>MSSV</th>
                 <th>Ngày</th>
                 <th>Ca làm</th>
-                <th>Giờ Check-in</th>
+                <th>Thời gian sự kiện</th>
                 <th>Tình trạng</th>
                 <th>Ảnh đối chiếu khuôn mặt</th>
                 <th style={{ textAlign: 'center' }}>Hành động</th>
@@ -1932,6 +2075,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
             <tbody>
               {filteredRequests.length ? (
                 filteredRequests.map((item, index) => {
+                  const attendanceId = item?.request_key || item?.event_id || item?.id || item?._id;
                   const isLate = Boolean(item.is_late || item.punctuality_status === 'LATE');
                   const checkInTime = item.captured_at
                     ? new Date(item.captured_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })
@@ -1940,13 +2084,13 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
                     ? new Date(item.captured_at).toLocaleDateString('vi-VN')
                     : (item.attendance_date ? new Date(item.attendance_date).toLocaleDateString('vi-VN') : '--');
                   return (
-                    <tr key={item.event_id} className={isLate ? 'row-late-table' : ''}>
+                    <tr key={item.request_key || item.event_id} className={isLate ? 'row-late-table' : ''}>
                       <td>{index + 1}</td>
                       <td><strong>{item.full_name}</strong></td>
                       <td><span className="student-code-tag">{item.student_code || '—'}</span></td>
                       <td>{reqDate}</td>
                       <td><span className="shift-pill">{item.shift_name || 'Ca làm'}</span></td>
-                      <td><strong>{checkInTime}</strong></td>
+                      <td><strong>{item.event_type === 'CHECK_OUT' ? 'Check-out' : 'Check-in'} · {checkInTime}</strong></td>
                       <td>
                         {isLate ? (
                           <span className="badge-late-warning">
@@ -1963,7 +2107,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
                       <td>
                         <button
                           className="table-photo-btn"
-                          onClick={() => onPreview(item.event_id)}
+                          onClick={() => onPreview(attendanceId)}
                           title="Xem ảnh chụp xác thực khuôn mặt"
                         >
                           📷 Xem ảnh
@@ -1974,17 +2118,13 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
                           <button
                             className="btn-table-approve"
                             title="Duyệt yêu cầu chấm công"
-                            onClick={() => onReview(item.event_id, 'APPROVED')}
-                          >
-                            ✓ Duyệt
-                          </button>
+                            disabled={processingId !== null} onClick={(e) => { e.stopPropagation(); onReview(item); }}
+                          >{attendanceId && processingId === attendanceId ? 'Đang duyệt...' : '✓ Duyệt'}</button>
                           <button
                             className="btn-table-reject"
                             title="Từ chối yêu cầu chấm công"
-                            onClick={() => onReject(item)}
-                          >
-                            ✕ Từ chối
-                          </button>
+                            disabled={processingId !== null} onClick={(e) => { e.stopPropagation(); onReject(item); }}
+                          >{attendanceId && processingId === attendanceId ? 'Đang xử lý...' : '✕ Từ chối'}</button>
                         </div>
                       </td>
                     </tr>
@@ -2001,6 +2141,44 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
           </table>
         </div>
       </div>
+    </motion.div>
+  );
+}
+
+function ApprovalConfirmationModal({ event, bulk, label, onConfirm, onCancel, loading }) {
+  const eventName = event?.event_type === 'CHECK_OUT' ? 'Check-out' : 'Check-in';
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={(e) => e.stopPropagation()}>
+      <motion.section className="approval-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="approval-confirm-title" onClick={(e) => e.stopPropagation()}>
+        <div className="approval-confirm-icon"><Check size={22} /></div>
+        <h3 id="approval-confirm-title">Xác nhận phê duyệt</h3>
+        <p>
+          {bulk
+            ? `Bạn có chắc chắn muốn phê duyệt ${label || 'các yêu cầu đã chọn'}?`
+            : `Bạn có chắc chắn muốn duyệt ${eventName} của ${event?.full_name || 'người dùng'}${event?.shift_name ? ` (${event.shift_name})` : ''}?`}
+        </p>
+        <div className="approval-confirm-actions">
+          <button type="button" className="btn-cancel-approval" onClick={onCancel} disabled={loading}>Hủy</button>
+          <button type="button" className="btn-confirm-approval" onClick={onConfirm} disabled={loading}>
+            {loading ? 'Đang xử lý...' : 'Xác nhận duyệt'}
+          </button>
+        </div>
+      </motion.section>
+    </motion.div>
+  );
+}
+
+function ActionNoticeModal({ title, message, onClose }) {
+  return (
+    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={(e) => e.stopPropagation()}>
+      <motion.section className="approval-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="action-notice-title" onClick={(e) => e.stopPropagation()}>
+        <div className="approval-confirm-icon"><Check size={22} /></div>
+        <h3 id="action-notice-title">{title}</h3>
+        <p>{message}</p>
+        <div className="approval-confirm-actions">
+          <button type="button" className="btn-confirm-approval" onClick={onClose}>Đóng</button>
+        </div>
+      </motion.section>
     </motion.div>
   );
 }
@@ -2083,15 +2261,37 @@ function RejectConfirmationModal({ event, reason, setReason, onConfirm, onCancel
   );
 }
 
-let isModelsLoaded = false;
-let isModelsLoading = false;
+let faceModelsPromise = null;
+
+function loadFaceModelsOnce() {
+  if (!faceModelsPromise) {
+    const localUrl = `${apiUrl.replace('/api', '')}/models`;
+    const cdnUrl = 'https://justadudewhohacks.github.io/face-api.js/models';
+    const loadFrom = (url) => Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(url),
+      faceapi.nets.faceLandmark68Net.loadFromUri(url),
+      faceapi.nets.faceRecognitionNet.loadFromUri(url),
+    ]);
+
+    faceModelsPromise = loadFrom(localUrl)
+      .catch((localError) => {
+        console.warn('Không tải được model khuôn mặt từ server, thử tải từ CDN.', localError);
+        return loadFrom(cdnUrl);
+      })
+      .catch((error) => {
+        faceModelsPromise = null;
+        throw error;
+      });
+  }
+  return faceModelsPromise;
+}
 
 function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const [cameraState, setCameraState] = useState('starting');
   const [cameraError, setCameraError] = useState('');
-  const [modelReady, setModelReady] = useState(isModelsLoaded);
+  const [modelReady, setModelReady] = useState(false);
   const [modelError, setModelError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -2112,7 +2312,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
+          video: { width: { ideal: 480 }, height: { ideal: 360 }, facingMode: 'user' },
         });
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -2134,48 +2334,12 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     }
 
     async function loadModelsOnce() {
-      if (isModelsLoaded) {
-        setModelReady(true);
-        return;
-      }
-      if (isModelsLoading) return;
-      isModelsLoading = true;
-
-      const LOCAL_URL = apiUrl.replace('/api', '') + '/models';
-      const CDN_FALLBACK_URL = 'https://justadudewhohacks.github.io/face-api.js/models';
-
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
-      
       try {
-        await Promise.race([
-          Promise.all([
-            faceapi.nets.tinyFaceDetector.loadFromUri(LOCAL_URL),
-            faceapi.nets.faceLandmark68Net.loadFromUri(LOCAL_URL),
-            faceapi.nets.faceRecognitionNet.loadFromUri(LOCAL_URL),
-          ]),
-          timeoutPromise
-        ]);
-        isModelsLoaded = true;
+        await loadFaceModelsOnce();
         if (!cancelled) setModelReady(true);
-      } catch (localErr) {
-        console.warn("Model local bị lỗi hoặc timeout, đang tải từ CDN...", localErr);
-        try {
-          await Promise.race([
-            Promise.all([
-              faceapi.nets.tinyFaceDetector.loadFromUri(CDN_FALLBACK_URL),
-              faceapi.nets.faceLandmark68Net.loadFromUri(CDN_FALLBACK_URL),
-              faceapi.nets.faceRecognitionNet.loadFromUri(CDN_FALLBACK_URL),
-            ]),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
-          ]);
-          isModelsLoaded = true;
-          if (!cancelled) setModelReady(true);
-        } catch (cdnErr) {
-          console.error("Không thể nạp model AI, fallback sang chế độ cơ bản:", cdnErr);
-          if (!cancelled) setModelError("Không thể nạp model AI. Vui lòng kiểm tra mạng!");
-        }
-      } finally {
-        isModelsLoading = false;
+      } catch (error) {
+        console.error('Không thể tải model nhận diện khuôn mặt.', error);
+        if (!cancelled) setModelError('Không thể tải model khuôn mặt. Hãy kiểm tra kết nối mạng rồi mở lại camera.');
       }
     }
 
@@ -2197,16 +2361,20 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     setCameraError('');
     try {
       let descriptor = [];
-      if (modelReady) {
-        const detection = await faceapi
-          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.35 }))
-          .withFaceLandmarks()
-          .withFaceDescriptor();
-        if (detection) {
-          descriptor = Array.from(detection.descriptor);
-        }
+      const video = videoRef.current;
+      const [detection, imageData] = await Promise.all([
+        modelReady
+          ? faceapi
+            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.35 }))
+            .withFaceLandmarks()
+            .withFaceDescriptor()
+          : Promise.resolve(null),
+        compressWebcamFrame(video),
+      ]);
+      if (detection) {
+        descriptor = Array.from(detection.descriptor);
       }
-      await onSuccess(descriptor, await compressWebcamFrame(videoRef.current));
+      await onSuccess(descriptor, imageData);
       onClose();
     } catch (error) {
       setCameraError(error.message);
@@ -2244,13 +2412,14 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
            'Vui lòng cấp quyền camera và thử lại.'}
         </p>
         {cameraError && cameraState !== 'error' && <div className="camera-error">{cameraError}</div>}
+        {modelError && <div className="camera-error">{modelError}</div>}
         <button
           className="checkout-button"
-          style={{ backgroundColor: cameraState === 'ready' && !submitting ? '#0d9488' : '#9ca3af', opacity: cameraState === 'ready' && !submitting ? 1 : 0.7 }}
-          disabled={cameraState !== 'ready' || submitting}
+          style={{ backgroundColor: cameraState === 'ready' && !submitting && modelReady ? '#0d9488' : '#9ca3af', opacity: cameraState === 'ready' && !submitting && modelReady ? 1 : 0.7 }}
+          disabled={cameraState !== 'ready' || submitting || !modelReady}
           onClick={confirmAttendance}
         >
-          {cameraState === 'ready' ? (submitting ? 'ĐANG XÁC THỰC...' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN') : 'ĐANG MỞ CAMERA...'}
+          {cameraState !== 'ready' ? 'ĐANG MỞ CAMERA...' : submitting ? 'ĐANG XÁC THỰC...' : !modelReady ? 'ĐANG TẢI NHẬN DIỆN...' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN'}
         </button>
       </motion.div>
     </motion.div>
@@ -2866,6 +3035,7 @@ function ShiftManagement() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editingId, setEditingId] = useState(null);
+  const [updatingShiftId, setUpdatingShiftId] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', start_time: '', end_time: '', is_active: true });
 
   useEffect(() => {
@@ -2921,6 +3091,32 @@ function ShiftManagement() {
     }
   }
 
+  async function toggleShiftAvailability(shift) {
+    setError('');
+    setUpdatingShiftId(shift.id);
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const currentlyActive = Number(shift.is_active) === 1 || shift.is_active === true;
+      const response = await fetch(`${apiUrl}/shifts/${shift.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          name: shift.name,
+          start_time: shift.start_time,
+          end_time: shift.end_time,
+          is_active: !currentlyActive,
+        }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật trạng thái ca.');
+      await loadShifts();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setUpdatingShiftId(null);
+    }
+  }
+
   return (
     <section className="shift-management-page">
       <div className="history-heading">
@@ -2941,7 +3137,7 @@ function ShiftManagement() {
               <th>Tên ca</th>
               <th>Giờ bắt đầu</th>
               <th>Giờ kết thúc</th>
-              <th>Khả dụng (mặc định)</th>
+              <th>Trạng thái ca</th>
               <th>Thao tác</th>
             </tr>
           </thead>
@@ -2959,7 +3155,7 @@ function ShiftManagement() {
                       onChange={e => setEditForm({ ...editForm, name: e.target.value })} 
                       style={{ padding: '4px', border: '1px solid #ccc', borderRadius: '4px', width: '100px' }}
                     />
-                  ) : shift.name}
+                  ) : formatShiftName(shift)}
                 </td>
                 <td>
                   {editingId === shift.id ? (
@@ -2990,7 +3186,7 @@ function ShiftManagement() {
                       checked={editForm.is_active} 
                       onChange={e => setEditForm({ ...editForm, is_active: e.target.checked })} 
                     />
-                  ) : (shift.is_active ? <span style={{ color: '#16a34a', fontWeight: 'bold' }}>CÓ</span> : <span style={{ color: '#dc2626', fontWeight: 'bold' }}>KHÔNG</span>)}
+                  ) : (Number(shift.is_active) === 1 || shift.is_active === true ? <span style={{ color: '#16a34a', fontWeight: 'bold' }}>ĐANG MỞ</span> : <span style={{ color: '#dc2626', fontWeight: 'bold' }}>ĐANG TẮT</span>)}
                 </td>
                 <td>
                   {editingId === shift.id ? (
@@ -2999,7 +3195,16 @@ function ShiftManagement() {
                       <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={cancelEdit}>Hủy</button>
                     </div>
                   ) : (
-                    <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => startEdit(shift)}>Sửa</button>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        className="shift-toggle"
+                        disabled={updatingShiftId !== null}
+                        onClick={() => toggleShiftAvailability(shift)}
+                      >
+                        {updatingShiftId === shift.id ? 'ĐANG LƯU...' : Number(shift.is_active) === 1 || shift.is_active === true ? 'Tắt ca' : 'Bật ca'}
+                      </button>
+                      <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => startEdit(shift)}>Sửa</button>
+                    </div>
                   )}
                 </td>
               </tr>
@@ -3012,4 +3217,3 @@ function ShiftManagement() {
 }
 
 export default App;
-
