@@ -21,7 +21,7 @@ router.post('/check-in', authenticate, async (req, res) => {
 
     const checkTime = client_time || new Date().toLocaleTimeString('en-GB', { hour12: false });
     const checkDate = client_date || new Date().toISOString().slice(0, 10);
-    const fullDateTime = ${checkDate} ;
+    const fullDateTime = `${checkDate} ${checkTime}`;
 
     let isLate = 0;
     let lateMinutes = 0;
@@ -31,7 +31,7 @@ router.post('/check-in', authenticate, async (req, res) => {
       const [shifts] = await db.query('SELECT * FROM shifts WHERE id = ?', [shift]);
       if (shifts.length > 0) {
         if (!Boolean(shifts[0].is_active)) {
-          return res.status(400).json({ success: false, message: Ca  hiện đang đóng! });
+          return res.status(400).json({ success: false, message: `Ca ${shifts[0].name} hiện đang đóng!` });
         }
         const curMin = toMinutes(checkTime);
         const startMin = toMinutes(shifts[0].start_time);
@@ -45,15 +45,15 @@ router.post('/check-in', authenticate, async (req, res) => {
     }
 
     await db.query(
-      INSERT INTO attendance_logs 
+      `INSERT INTO attendance_logs 
        (mssv, full_name, shift, work_date, check_in_time, check_in_image, status, is_late, late_minutes)
-       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?),
+       VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
       [userMssv, userName, shift, checkDate, fullDateTime, finalImage, isLate, lateMinutes]
     );
 
     return res.status(200).json({
       success: true,
-      message: isLate ? Check-in thành công (Trễ  phút) : 'Check-in đúng giờ thành công!'
+      message: isLate ? `Check-in thành công (Trễ ${lateMinutes} phút)` : 'Check-in đúng giờ thành công!'
     });
   } catch (error) {
     console.error("CHECK-IN ERROR:", error);
@@ -71,7 +71,7 @@ router.post('/check-out', authenticate, async (req, res) => {
 
     const checkTime = client_time || new Date().toLocaleTimeString('en-GB', { hour12: false });
     const checkDate = client_date || new Date().toISOString().slice(0, 10);
-    const fullDateTime = ${checkDate} ;
+    const fullDateTime = `${checkDate} ${checkTime}`;
 
     // Kiểm tra giờ check-out từ bảng 'shifts'
     try {
@@ -82,7 +82,7 @@ router.post('/check-out', authenticate, async (req, res) => {
         if (curMin < endMin) {
           return res.status(400).json({
             success: false,
-            message: Chưa đến giờ kết thúc ca (). Không thể check-out trước giờ!
+            message: `Chưa đến giờ kết thúc ca (${shifts[0].end_time}). Không thể check-out trước giờ!`
           });
         }
       }
@@ -91,24 +91,24 @@ router.post('/check-out', authenticate, async (req, res) => {
     }
 
     const [rows] = await db.query(
-      SELECT id FROM attendance_logs 
+      `SELECT id FROM attendance_logs 
        WHERE (mssv = ? OR full_name = ?) AND work_date = ?
-       ORDER BY id DESC LIMIT 1,
+       ORDER BY id DESC LIMIT 1`,
       [userMssv, userName, checkDate]
     );
 
     if (rows.length === 0) {
       await db.query(
-        INSERT INTO attendance_logs 
+        `INSERT INTO attendance_logs 
          (mssv, full_name, shift, work_date, check_out_time, check_out_image, status)
-         VALUES (?, ?, ?, ?, ?, ?, 'PENDING'),
+         VALUES (?, ?, ?, ?, ?, ?, 'PENDING')`,
         [userMssv, userName, shift, checkDate, fullDateTime, finalImage]
       );
     } else {
       await db.query(
-        UPDATE attendance_logs 
+        `UPDATE attendance_logs 
          SET check_out_time = ?, check_out_image = ? 
-         WHERE id = ?,
+         WHERE id = ?`,
         [fullDateTime, finalImage, rows[0].id]
       );
     }
