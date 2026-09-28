@@ -2,20 +2,67 @@ import { Router } from 'express';
 import { pool } from '../config/database.js';
 import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
-import { cosineSimilarity, validateEmbedding } from '../utils/face.js';
+import { faceDistance, validateEmbedding } from '../utils/face.js';
 
 const router = Router();
 
 router.post('/register', authenticate, async (request, response, next) => {
+  let connection;
   try {
     const { embedding } = request.body;
     if (!validateEmbedding(embedding)) {
       return response.status(400).json({ success: false, message: 'Embedding khuôn mặt không hợp lệ.', errorCode: 'INVALID_EMBEDDING' });
     }
-    await pool.execute('UPDATE users SET face_embedding = ?, face_registered = TRUE WHERE id = ?', [JSON.stringify(embedding), request.user.userId]);
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      'SELECT face_embedding, face_registered FROM users WHERE id = ? FOR UPDATE',
+      [request.user.userId],
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy tài khoản.' });
+    }
+    const stored = typeof rows[0].face_embedding === 'string'
+      ? JSON.parse(rows[0].face_embedding)
+      : rows[0].face_embedding;
+    if (validateEmbedding(stored)) {
+      if (faceDistance(embedding, stored) <= env.faceMatchDistanceThreshold) {
+        if (!rows[0].face_registered) {
+          await connection.execute(
+            'UPDATE users SET face_registered = TRUE WHERE id = ?',
+            [request.user.userId],
+          );
+        }
+        await connection.commit();
+        return response.json({ success: true, message: 'Khuôn mặt đã được đăng ký.' });
+      }
+      await connection.rollback();
+      return response.status(409).json({
+        success: false,
+        message: 'Khuôn mặt không khớp với khuôn mặt đã đăng ký.',
+        errorCode: 'FACE_MISMATCH',
+      });
+    }
+    if (rows[0].face_registered) {
+      await connection.rollback();
+      return response.status(409).json({
+        success: false,
+        message: 'Tài khoản đã đăng ký khuôn mặt nhưng dữ liệu không hợp lệ. Vui lòng liên hệ quản trị viên.',
+        errorCode: 'INVALID_REGISTERED_FACE',
+      });
+    }
+    await connection.execute(
+      'UPDATE users SET face_embedding = ?, face_registered = TRUE WHERE id = ?',
+      [JSON.stringify(embedding), request.user.userId],
+    );
+    await connection.commit();
     return response.json({ success: true, message: 'Đăng ký khuôn mặt thành công.' });
   } catch (error) {
+    if (connection) await connection.rollback();
     return next(error);
+  } finally {
+    connection?.release();
   }
 });
 
@@ -31,8 +78,15 @@ router.post('/verify', authenticate, async (request, response, next) => {
     if (!validateEmbedding(storedEmbedding)) {
       return response.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt.', errorCode: 'FACE_NOT_REGISTERED' });
     }
-    const score = cosineSimilarity(embedding, storedEmbedding);
-    return response.json({ success: true, data: { verified: score >= env.faceMatchThreshold, score, threshold: env.faceMatchThreshold } });
+    const distance = faceDistance(embedding, storedEmbedding);
+    return response.json({
+      success: true,
+      data: {
+        verified: distance <= env.faceMatchDistanceThreshold,
+        distance,
+        threshold: env.faceMatchDistanceThreshold,
+      },
+    });
   } catch (error) {
     return next(error);
   }

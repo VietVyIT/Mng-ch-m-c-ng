@@ -50,7 +50,7 @@ DB_USER=root
 DB_PASSWORD=mật_khẩu_mysql_của_bạn
 
 JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
-FACE_MATCH_THRESHOLD=0.6
+FACE_MATCH_DISTANCE_THRESHOLD=0.6
 ```
 
 > Chỉ cần sửa `DB_PASSWORD` là chạy được. Các giá trị khác giữ mặc định.

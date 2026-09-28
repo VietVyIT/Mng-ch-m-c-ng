@@ -3,7 +3,7 @@ import db from '../config/database.js';
 import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { canCheckInAt, canCheckOutAt } from '../utils/attendance-window.js';
-import { cosineSimilarity, validateEmbedding } from '../utils/face.js';
+import { faceDistance, validateEmbedding } from '../utils/face.js';
 
 const router = express.Router();
 
@@ -129,7 +129,7 @@ router.post('/check-in', authenticate, async (req, res) => {
       await connection.rollback();
       return res.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt. Hãy đăng ký rồi thử chấm công lại.' });
     }
-    if (cosineSimilarity(embedding, storedEmbedding) < env.faceMatchThreshold) {
+    if (faceDistance(embedding, storedEmbedding) > env.faceMatchDistanceThreshold) {
       await connection.rollback();
       return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.' });
     }
@@ -229,7 +229,7 @@ router.post('/check-out', authenticate, async (req, res) => {
       await connection.rollback();
       return res.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt. Hãy đăng ký rồi thử chấm công lại.' });
     }
-    if (cosineSimilarity(embedding, storedEmbedding) < env.faceMatchThreshold) {
+    if (faceDistance(embedding, storedEmbedding) > env.faceMatchDistanceThreshold) {
       await connection.rollback();
       return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.' });
     }
