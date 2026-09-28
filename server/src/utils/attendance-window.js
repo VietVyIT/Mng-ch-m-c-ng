@@ -13,3 +13,24 @@ export function canCheckOutAt(currentSeconds, startSeconds, endSeconds, nextShif
   const { opensAt, closesAt } = getCheckOutWindow(startSeconds, endSeconds, nextShiftStartSeconds);
   return currentSeconds >= opensAt && currentSeconds < closesAt;
 }
+
+export function getShiftAttendanceState(
+  currentSeconds,
+  startSeconds,
+  endSeconds,
+  isActive,
+  nextShiftStartSeconds = 24 * 60 * 60,
+) {
+  const isCheckInOpen = isActive && canCheckInAt(currentSeconds, startSeconds, endSeconds);
+  const checkoutOpensAt = Math.max(startSeconds, endSeconds - 5 * 60);
+  return {
+    isCheckInOpen,
+    isCheckOutOpen: isActive && canCheckOutAt(
+      currentSeconds,
+      startSeconds,
+      endSeconds,
+      nextShiftStartSeconds,
+    ),
+    isCheckoutWaiting: isActive && currentSeconds >= startSeconds && currentSeconds < checkoutOpensAt,
+  };
+}

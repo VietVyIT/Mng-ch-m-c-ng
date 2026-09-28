@@ -4,6 +4,21 @@ export function validateEmbedding(embedding) {
     && embedding.every((value) => Number.isFinite(value));
 }
 
+export function validateEmbeddings(embeddings) {
+  return Array.isArray(embeddings)
+    && embeddings.length >= 1
+    && embeddings.length <= 5
+    && embeddings.every(validateEmbedding);
+}
+
+export function averageEmbeddings(embeddings) {
+  if (!validateEmbeddings(embeddings)) return null;
+
+  return embeddings[0].map((_, index) => (
+    embeddings.reduce((sum, embedding) => sum + embedding[index], 0) / embeddings.length
+  ));
+}
+
 export function faceDistance(first, second) {
   if (!validateEmbedding(first) || !validateEmbedding(second)) return Number.POSITIVE_INFINITY;
 

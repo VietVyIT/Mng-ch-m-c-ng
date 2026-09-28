@@ -2,8 +2,8 @@ import express from 'express';
 import db from '../config/database.js';
 import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
-import { canCheckInAt, canCheckOutAt } from '../utils/attendance-window.js';
-import { faceDistance, validateEmbedding } from '../utils/face.js';
+import { canCheckInAt, canCheckOutAt, getShiftAttendanceState } from '../utils/attendance-window.js';
+import { averageEmbeddings, faceDistance, validateEmbedding } from '../utils/face.js';
 
 const router = express.Router();
 
@@ -101,9 +101,10 @@ router.post('/check-in', authenticate, async (req, res) => {
   let connection;
   try {
     await ensureReviewStatusColumns();
-    const { image, imageData, embedding, shift } = req.body;
+    const { image, imageData, embedding, embeddings, shift } = req.body;
+    const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
     const finalImage = image || imageData || null;
-    if (!validateEmbedding(embedding)) {
+    if (!currentEmbedding) {
       return res.status(400).json({ success: false, message: 'Không nhận diện được khuôn mặt. Hãy nhìn thẳng vào camera và thử lại.' });
     }
     const shiftInfo = await getShiftAvailability(shift, 'CHECK_IN');
@@ -129,9 +130,9 @@ router.post('/check-in', authenticate, async (req, res) => {
       await connection.rollback();
       return res.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt. Hãy đăng ký rồi thử chấm công lại.' });
     }
-    if (faceDistance(embedding, storedEmbedding) > env.faceMatchDistanceThreshold) {
+    if (faceDistance(currentEmbedding, storedEmbedding) > env.faceMatchDistanceThreshold) {
       await connection.rollback();
-      return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.' });
+      return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.', errorCode: 'FACE_MISMATCH' });
     }
     const userMssv = user.student_code || user.username;
     const identifiers = [...new Set([user.username, user.student_code].filter(Boolean))];
@@ -199,9 +200,10 @@ router.post('/check-out', authenticate, async (req, res) => {
   let connection;
   try {
     await ensureReviewStatusColumns();
-    const { image, imageData, embedding, shift } = req.body;
+    const { image, imageData, embedding, embeddings, shift } = req.body;
+    const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
     const finalImage = image || imageData || null;
-    if (!validateEmbedding(embedding)) {
+    if (!currentEmbedding) {
       return res.status(400).json({ success: false, message: 'Không nhận diện được khuôn mặt. Hãy nhìn thẳng vào camera và thử lại.' });
     }
     const shiftInfo = await getShiftAvailability(shift, 'CHECK_OUT');
@@ -229,9 +231,9 @@ router.post('/check-out', authenticate, async (req, res) => {
       await connection.rollback();
       return res.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt. Hãy đăng ký rồi thử chấm công lại.' });
     }
-    if (faceDistance(embedding, storedEmbedding) > env.faceMatchDistanceThreshold) {
+    if (faceDistance(currentEmbedding, storedEmbedding) > env.faceMatchDistanceThreshold) {
       await connection.rollback();
-      return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.' });
+      return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.', errorCode: 'FACE_MISMATCH' });
     }
     const identifiers = [...new Set([user.username, user.student_code].filter(Boolean))];
     const placeholders = identifiers.map(() => '?').join(', ');
@@ -317,22 +319,41 @@ router.get('/today', authenticate, async (req, res) => {
 
 router.get('/shifts/today', authenticate, async (req, res) => {
   try {
+    res.set('Cache-Control', 'no-store, max-age=0');
     const [rows] = await db.query(
       `SELECT id, name, start_time, end_time, is_active
        FROM shifts
        ORDER BY FIELD(id, 'MORNING', 'AFTERNOON', 'EVENING')`,
     );
-    const allShifts = rows.map((row) => ({
-      code: row.id,
-      name: {
-        MORNING: 'Ca Sáng',
-        AFTERNOON: 'Ca Chiều',
-        EVENING: 'Ca Tối',
-      }[row.id] || row.name,
-      start: row.start_time,
-      end: row.end_time,
-      isActive: Number(row.is_active) === 1,
-    }));
+    const { time } = getVietnamDateTime();
+    const currentSeconds = toSeconds(time);
+    const allShifts = rows.map((row) => {
+      const startSeconds = toSeconds(row.start_time);
+      const endSeconds = toSeconds(row.end_time);
+      const nextShiftStartSeconds = rows
+        .filter((nextShift) => toSeconds(nextShift.start_time) >= endSeconds)
+        .map((nextShift) => toSeconds(nextShift.start_time))
+        .sort((left, right) => left - right)[0] ?? 24 * 60 * 60;
+      const isActive = Number(row.is_active) === 1;
+      return {
+        code: row.id,
+        name: {
+          MORNING: 'Ca Sáng',
+          AFTERNOON: 'Ca Chiều',
+          EVENING: 'Ca Tối',
+        }[row.id] || row.name,
+        start: row.start_time,
+        end: row.end_time,
+        isActive,
+        ...getShiftAttendanceState(
+          currentSeconds,
+          startSeconds,
+          endSeconds,
+          isActive,
+          nextShiftStartSeconds,
+        ),
+      };
+    });
     const shifts = allShifts.filter((shift) => shift.isActive);
     const isOpen = (shiftCode) => shifts.some((shift) => shift.code === shiftCode);
     return res.json({

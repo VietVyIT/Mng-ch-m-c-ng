@@ -64,49 +64,20 @@ if (import.meta.env.PROD && !configuredApiUrl) {
   console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
 }
 
-function getVietnamSeconds() {
-  const parts = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Ho_Chi_Minh',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date());
-  const part = (type) => Number(parts.find((item) => item.type === type)?.value || 0);
-  return part('hour') * 3600 + part('minute') * 60 + part('second');
-}
-
 function timeToSeconds(value) {
   const [hours = 0, minutes = 0, seconds = 0] = String(value || '').split(':').map(Number);
   return hours * 3600 + minutes * 60 + seconds;
 }
 
 function useAttendanceWindow(shiftSettings, attendanceRecord) {
-  const [nowSeconds, setNowSeconds] = useState(getVietnamSeconds);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => setNowSeconds(getVietnamSeconds()), 1000);
-    return () => window.clearInterval(interval);
-  }, []);
-
   const allShifts = [...(shiftSettings?.allShifts || shiftSettings?.shifts || [])]
     .sort((left, right) => timeToSeconds(left.start) - timeToSeconds(right.start));
-  const activeShift = allShifts.find((shift) => (
-    shift.isActive !== false
-      && nowSeconds >= timeToSeconds(shift.start)
-      && nowSeconds < timeToSeconds(shift.end)
-  )) || null;
+  const activeShift = allShifts.find((shift) => shift.isCheckInOpen === true) || null;
   const recordShift = allShifts.find((shift) => shift.code === attendanceRecord?.shift_code) || null;
   const hasOpenCheckIn = Boolean(attendanceRecord?.check_in && !attendanceRecord?.check_out);
 
   let checkoutShift = null;
-  if (hasOpenCheckIn && recordShift?.isActive !== false) {
-    const endSeconds = timeToSeconds(recordShift.end);
-    const nextShift = allShifts.find((shift) => timeToSeconds(shift.start) >= endSeconds);
-    const checkoutOpensAt = Math.max(timeToSeconds(recordShift.start), endSeconds - 5 * 60);
-    const checkoutClosesAt = nextShift ? timeToSeconds(nextShift.start) : 24 * 60 * 60;
-    if (nowSeconds >= checkoutOpensAt && nowSeconds < checkoutClosesAt) checkoutShift = recordShift;
-  }
+  if (hasOpenCheckIn && recordShift?.isCheckOutOpen === true) checkoutShift = recordShift;
 
   const checkInShift = activeShift
     && (!attendanceRecord?.check_in
@@ -117,7 +88,7 @@ function useAttendanceWindow(shiftSettings, attendanceRecord) {
   const waitingForCheckout = Boolean(
     hasOpenCheckIn
     && recordShift
-    && nowSeconds < Math.max(timeToSeconds(recordShift.start), timeToSeconds(recordShift.end) - 5 * 60),
+    && recordShift.isCheckoutWaiting,
   );
   return {
     activeShift,
@@ -270,16 +241,16 @@ async function compressWebcamFrame(video) {
   return canvas.toDataURL('image/jpeg', 0.7);
 }
 
-async function registerFaceEmbedding(user, embedding) {
+async function registerFaceEmbedding(user, embeddings) {
   const token = localStorage.getItem('attendance_token');
   const response = await fetch(`${apiUrl}/face/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ embedding }),
+    body: JSON.stringify({ embedding: embeddings[0], embeddings }),
   });
   const body = await response.json();
   if (!response.ok || !body.success) {
-    throw new Error(body.message || 'Không thể cập nhật khuôn mặt.');
+    throw Object.assign(new Error(body.message || 'Không thể cập nhật khuôn mặt.'), { code: body.errorCode });
   }
   const updatedUser = { ...user, faceRegistered: true };
   Object.assign(user, updatedUser);
@@ -583,15 +554,17 @@ function AdminAttendanceWorkArea({ user }) {
   const [checkInFeedback, setCheckInFeedback] = useState(null);
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = attendanceWindow.waitingForCheckout
-    ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
-    : shiftData?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT';
+  const unavailableActionLabel = !shiftData
+    ? 'ĐANG TẢI TRẠNG THÁI CA'
+    : attendanceWindow.waitingForCheckout
+      ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
+      : shiftData.shifts?.length ? 'CHƯA ĐẾN / QUA GIỜ CA' : 'CA ĐANG TẮT';
 
   async function loadAttendance() {
     const token = localStorage.getItem('attendance_token');
     const headers = { Authorization: `Bearer ${token}` };
     const [shiftResponse, todayResponse, historyResponse] = await Promise.all([
-      fetch(`${apiUrl}/attendance/shifts/today`, { headers }),
+      fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers }),
       fetch(`${apiUrl}/attendance/today`, { headers }),
       fetch(`${apiUrl}/attendance/my`, { headers }),
     ]);
@@ -607,7 +580,7 @@ function AdminAttendanceWorkArea({ user }) {
     loadAttendance().catch((requestError) => setError(requestError.message));
     const shiftRefresh = window.setInterval(() => {
       const token = localStorage.getItem('attendance_token');
-      fetch(`${apiUrl}/attendance/shifts/today`, { headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } })
         .then(async (response) => {
           if (!response.ok) throw new Error('Không thể cập nhật trạng thái ca.');
           const body = await response.json();
@@ -622,18 +595,20 @@ function AdminAttendanceWorkArea({ user }) {
     if (!canAttend) setFaceModal(false);
   }, [canAttend]);
 
-  async function handleFaceSuccess(embedding, imageData) {
+  async function handleFaceSuccess(embeddings, imageData) {
     const token = localStorage.getItem('attendance_token');
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     if (!checkedIn && !user.faceRegistered) {
-      await registerFaceEmbedding(user, embedding);
+      await registerFaceEmbedding(user, embeddings);
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const shiftCode = attendanceWindow.actionShift?.code;
     if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding: embeddings[0], embeddings, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
     const body = await response.json();
-    if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
+    if (!response.ok || !body.success) {
+      throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
+    }
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
     setCheckInFeedback({
@@ -779,9 +754,11 @@ function UserPortal({ user }) {
   const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = attendanceWindow.waitingForCheckout
-    ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
-    : shift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT';
+  const unavailableActionLabel = !shift
+    ? 'ĐANG TẢI TRẠNG THÁI CA'
+    : attendanceWindow.waitingForCheckout
+      ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
+      : shift.shifts?.length ? 'CHƯA ĐẾN / QUA GIỜ CA' : 'CA ĐANG TẮT';
   const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
 
@@ -790,7 +767,7 @@ function UserPortal({ user }) {
     const headers = { Authorization: `Bearer ${token}` };
     Promise.all([
       fetch(`${apiUrl}/attendance/today`, { headers }).then((response) => response.json()),
-      fetch(`${apiUrl}/attendance/shifts/today`, { headers }).then((response) => response.json()),
+      fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers }).then((response) => response.json()),
       fetch(`${apiUrl}/attendance/my`, { headers }).then((response) => response.json()),
     ]).then(([todayBody, shiftBody, historyBody]) => {
       setToday(todayBody.data || null);
@@ -827,18 +804,20 @@ function UserPortal({ user }) {
     if (!canAttend) setFaceModal(false);
   }, [canAttend]);
 
-  async function handleFaceSuccess(embedding, imageData) {
+  async function handleFaceSuccess(embeddings, imageData) {
     const token = localStorage.getItem('attendance_token');
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     if (!checkedIn && !user.faceRegistered) {
-      await registerFaceEmbedding(user, embedding);
+      await registerFaceEmbedding(user, embeddings);
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const shiftCode = attendanceWindow.actionShift?.code;
     if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
+    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding: embeddings[0], embeddings, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
     const body = await response.json();
-    if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
+    if (!response.ok || !body.success) {
+      throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
+    }
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
     setCheckInFeedback({
@@ -992,9 +971,11 @@ function AdminDashboard({ user }) {
   const [selectedDate, setSelectedDate] = useState(getVietnamDateString);
   const hasAttendanceData = dashboardStats?.trend?.some((d) => d.onTime > 0 || d.late > 0);
   const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = attendanceWindow.waitingForCheckout
-    ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
-    : todayShift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT';
+  const unavailableActionLabel = !todayShift
+    ? 'ĐANG TẢI TRẠNG THÁI CA'
+    : attendanceWindow.waitingForCheckout
+      ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
+      : todayShift.shifts?.length ? 'CHƯA ĐẾN / QUA GIỜ CA' : 'CA ĐANG TẮT';
   const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     day: '2-digit',
@@ -1020,6 +1001,7 @@ function AdminDashboard({ user }) {
   async function loadActiveShifts() {
     const token = localStorage.getItem('attendance_token');
     const response = await fetch(`${apiUrl}/attendance/shifts/today`, {
+      cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error('Không thể tải trạng thái ca làm.');
@@ -1193,10 +1175,10 @@ function AdminDashboard({ user }) {
     setPhotoPreview(result.data);
   }
 
-  async function handleFaceSuccess(embedding, imageData) {
+  async function handleFaceSuccess(embeddings, imageData) {
     const token = localStorage.getItem('attendance_token');
     if (!checkedIn && !user.faceRegistered) {
-      await registerFaceEmbedding(user, embedding);
+      await registerFaceEmbedding(user, embeddings);
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const shiftCode = attendanceWindow.actionShift?.code;
@@ -1204,10 +1186,12 @@ function AdminDashboard({ user }) {
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }),
+      body: JSON.stringify({ embedding: embeddings[0], embeddings, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }),
     });
     const body = await response.json();
-    if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
+    if (!response.ok || !body.success) {
+      throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
+    }
     const refresh = await fetch(`${apiUrl}/attendance/today`, { headers: { Authorization: `Bearer ${token}` } });
     const refreshedBody = await refresh.json();
     setLatestAttendance(refreshedBody.data);
@@ -2343,10 +2327,19 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const [submitting, setSubmitting] = useState(false);
 
   async function detectFace(video) {
-    const detect = () => faceapi
-      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 }))
-      .withFaceLandmarks()
-      .withFaceDescriptor();
+    const detect = async () => {
+      for (const options of [
+        { inputSize: 320, scoreThreshold: 0.25 },
+        { inputSize: 224, scoreThreshold: 0.2 },
+      ]) {
+        const result = await faceapi
+          .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions(options))
+          .withFaceLandmarks()
+          .withFaceDescriptor();
+        if (result) return result;
+      }
+      return null;
+    };
 
     try {
       return await detect();
@@ -2462,21 +2455,25 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     setCameraError('');
     try {
       const scanStartedAt = performance.now();
-      let descriptor = [];
       const video = videoRef.current;
-      const [detection, imageData] = await Promise.all([
-        modelReady
-          ? detectFace(video)
-          : Promise.resolve(null),
-        compressWebcamFrame(video),
-      ]);
-      if (!detection) throw new Error('Chưa phát hiện khuôn mặt. Hãy nhìn thẳng vào camera trong khung hình rồi thử lại.');
-      descriptor = Array.from(detection.descriptor);
+      if (!modelReady) throw new Error('Model nhận diện chưa sẵn sàng. Vui lòng đợi một chút rồi thử lại.');
+      const embeddings = [];
+      for (let frame = 0; frame < 3; frame += 1) {
+        if (frame > 0) await new Promise((resolve) => window.setTimeout(resolve, 150));
+        const detection = await detectFace(video);
+        if (detection) embeddings.push(Array.from(detection.descriptor));
+      }
+      if (!embeddings.length) {
+        throw new Error('Chưa nhận diện được khuôn mặt. Hãy lau camera, tăng ánh sáng, nhìn thẳng và đưa mặt vào giữa khung hình rồi thử lại.');
+      }
+      const imageData = await compressWebcamFrame(video);
       console.info(`Face scan completed in ${Math.round(performance.now() - scanStartedAt)}ms.`);
-      await onSuccess(descriptor, imageData);
+      await onSuccess(embeddings, imageData);
       onClose();
     } catch (error) {
-      setCameraError(error.message);
+      setCameraError(error.code === 'FACE_MISMATCH'
+        ? 'Khuôn mặt chưa khớp với tài khoản. Hãy lau camera, nhìn thẳng, đủ ánh sáng và thử lại. Nếu vẫn lỗi, liên hệ quản trị viên để kiểm tra dữ liệu khuôn mặt đã đăng ký.'
+        : error.message);
     } finally {
       setSubmitting(false);
     }

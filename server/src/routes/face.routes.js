@@ -2,15 +2,16 @@ import { Router } from 'express';
 import { pool } from '../config/database.js';
 import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
-import { faceDistance, validateEmbedding } from '../utils/face.js';
+import { averageEmbeddings, faceDistance, validateEmbedding } from '../utils/face.js';
 
 const router = Router();
 
 router.post('/register', authenticate, async (request, response, next) => {
   let connection;
   try {
-    const { embedding } = request.body;
-    if (!validateEmbedding(embedding)) {
+    const { embedding, embeddings } = request.body;
+    const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
+    if (!currentEmbedding) {
       return response.status(400).json({ success: false, message: 'Embedding khuôn mặt không hợp lệ.', errorCode: 'INVALID_EMBEDDING' });
     }
     connection = await pool.getConnection();
@@ -27,7 +28,7 @@ router.post('/register', authenticate, async (request, response, next) => {
       ? JSON.parse(rows[0].face_embedding)
       : rows[0].face_embedding;
     if (validateEmbedding(stored)) {
-      if (faceDistance(embedding, stored) <= env.faceMatchDistanceThreshold) {
+      if (faceDistance(currentEmbedding, stored) <= env.faceMatchDistanceThreshold) {
         if (!rows[0].face_registered) {
           await connection.execute(
             'UPDATE users SET face_registered = TRUE WHERE id = ?',
@@ -54,7 +55,7 @@ router.post('/register', authenticate, async (request, response, next) => {
     }
     await connection.execute(
       'UPDATE users SET face_embedding = ?, face_registered = TRUE WHERE id = ?',
-      [JSON.stringify(embedding), request.user.userId],
+      [JSON.stringify(currentEmbedding), request.user.userId],
     );
     await connection.commit();
     return response.json({ success: true, message: 'Đăng ký khuôn mặt thành công.' });
@@ -68,8 +69,9 @@ router.post('/register', authenticate, async (request, response, next) => {
 
 router.post('/verify', authenticate, async (request, response, next) => {
   try {
-    const { embedding } = request.body;
-    if (!validateEmbedding(embedding)) {
+    const { embedding, embeddings } = request.body;
+    const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
+    if (!currentEmbedding) {
       return response.status(400).json({ success: false, message: 'Embedding khuôn mặt không hợp lệ.', errorCode: 'INVALID_EMBEDDING' });
     }
     const [rows] = await pool.execute('SELECT face_embedding FROM users WHERE id = ? LIMIT 1', [request.user.userId]);
@@ -78,7 +80,7 @@ router.post('/verify', authenticate, async (request, response, next) => {
     if (!validateEmbedding(storedEmbedding)) {
       return response.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt.', errorCode: 'FACE_NOT_REGISTERED' });
     }
-    const distance = faceDistance(embedding, storedEmbedding);
+    const distance = faceDistance(currentEmbedding, storedEmbedding);
     return response.json({
       success: true,
       data: {
