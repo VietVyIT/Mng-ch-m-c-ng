@@ -155,9 +155,9 @@ SELECT
   'Quản trị viên',
   NULL,
   'admin',
-  '$2b$10$HW66dep9uV0JpPZiY.kmf.ckc4KZuInwVuYjdXHGL0mdT4BQuT/3y',
+  '$2b$10$7AZG/p6hwpkEkwnU/6wVROpWdHEyJ/m9t2BzI1KB3y5EPoOzOwzce',
   'ADMIN',
-  FALSE
+  TRUE
 WHERE NOT EXISTS (
   SELECT 1 FROM users WHERE username = 'admin'
 );

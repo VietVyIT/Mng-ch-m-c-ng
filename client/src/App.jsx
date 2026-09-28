@@ -53,9 +53,9 @@ function getVietnamDateString(date = new Date()) {
 
 function formatShiftName(shift) {
   const standardNames = {
-    MORNING: 'Ca sáng',
-    AFTERNOON: 'Ca chiều',
-    EVENING: 'Ca tối',
+    MORNING: 'Ca Sáng',
+    AFTERNOON: 'Ca Chiều',
+    EVENING: 'Ca Tối',
   };
   return standardNames[shift?.code || shift?.id] || shift?.name || 'Ca làm việc';
 }
@@ -64,36 +64,68 @@ if (import.meta.env.PROD && !configuredApiUrl) {
   console.warn('VITE_API_URL không được cung cấp, sử dụng relative path /api cho production.');
 }
 
-function useRealtimeShift(shiftSettings) {
-  const [currentShift, setCurrentShift] = useState(null);
+function getVietnamSeconds() {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+  const part = (type) => Number(parts.find((item) => item.type === type)?.value || 0);
+  return part('hour') * 3600 + part('minute') * 60 + part('second');
+}
+
+function timeToSeconds(value) {
+  const [hours = 0, minutes = 0, seconds = 0] = String(value || '').split(':').map(Number);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function useAttendanceWindow(shiftSettings, attendanceRecord) {
+  const [nowSeconds, setNowSeconds] = useState(getVietnamSeconds);
 
   useEffect(() => {
-    function updateShift() {
-      const now = new Date();
-      const [hours, minutes] = new Intl.DateTimeFormat('en-GB', {
-        timeZone: 'Asia/Ho_Chi_Minh',
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      }).format(now).split(':').map(Number);
-      const totalMinutes = hours * 60 + minutes;
-      const parseMinutes = (time) => {
-        const [hour = 0, minute = 0] = String(time || '').split(':').map(Number);
-        return hour * 60 + minute;
-      };
-      const availableShifts = shiftSettings?.shifts || [];
-      const activeShift = availableShifts.find((shift) => (
-        totalMinutes >= parseMinutes(shift.start) && totalMinutes < parseMinutes(shift.end)
-      ));
-      setCurrentShift(activeShift || null);
-    }
-    
-    updateShift();
-    const interval = setInterval(updateShift, 30000);
-    return () => clearInterval(interval);
-  }, [shiftSettings]);
+    const interval = window.setInterval(() => setNowSeconds(getVietnamSeconds()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
 
-  return currentShift;
+  const allShifts = [...(shiftSettings?.allShifts || shiftSettings?.shifts || [])]
+    .sort((left, right) => timeToSeconds(left.start) - timeToSeconds(right.start));
+  const activeShift = allShifts.find((shift) => (
+    shift.isActive !== false
+      && nowSeconds >= timeToSeconds(shift.start)
+      && nowSeconds < timeToSeconds(shift.end)
+  )) || null;
+  const recordShift = allShifts.find((shift) => shift.code === attendanceRecord?.shift_code) || null;
+  const hasOpenCheckIn = Boolean(attendanceRecord?.check_in && !attendanceRecord?.check_out);
+
+  let checkoutShift = null;
+  if (hasOpenCheckIn && recordShift?.isActive !== false) {
+    const endSeconds = timeToSeconds(recordShift.end);
+    const nextShift = allShifts.find((shift) => timeToSeconds(shift.start) >= endSeconds);
+    const checkoutOpensAt = Math.max(timeToSeconds(recordShift.start), endSeconds - 5 * 60);
+    const checkoutClosesAt = nextShift ? timeToSeconds(nextShift.start) : 24 * 60 * 60;
+    if (nowSeconds >= checkoutOpensAt && nowSeconds < checkoutClosesAt) checkoutShift = recordShift;
+  }
+
+  const checkInShift = activeShift
+    && (!attendanceRecord?.check_in
+      || attendanceRecord.shift_code !== activeShift.code)
+    ? activeShift
+    : null;
+  const action = checkoutShift ? 'CHECK_OUT' : checkInShift ? 'CHECK_IN' : null;
+  const waitingForCheckout = Boolean(
+    hasOpenCheckIn
+    && recordShift
+    && nowSeconds < Math.max(timeToSeconds(recordShift.start), timeToSeconds(recordShift.end) - 5 * 60),
+  );
+  return {
+    activeShift,
+    actionShift: checkoutShift || checkInShift,
+    action,
+    canAttend: Boolean(action),
+    waitingForCheckout,
+  };
 }
 
 function isSecureCameraContext() {
@@ -526,15 +558,17 @@ function PageContent({ page, user, onUserUpdated }) {
 
 function AdminAttendanceWorkArea({ user }) {
   const [shiftData, setShiftData] = useState(null);
-  const realtimeShift = useRealtimeShift(shiftData);
   const [today, setToday] = useState(null);
+  const attendanceWindow = useAttendanceWindow(shiftData, today);
+  const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
   const [faceModal, setFaceModal] = useState(false);
-  const [checkedIn, setCheckedIn] = useState(false);
   const [error, setError] = useState('');
   const [checkInFeedback, setCheckInFeedback] = useState(null);
-  const canAttend = checkedIn
-    ? Boolean(today?.shift_code && realtimeShift?.code === today.shift_code)
-    : Boolean(realtimeShift);
+  const checkedIn = attendanceWindow.action === 'CHECK_OUT';
+  const canAttend = attendanceWindow.canAttend;
+  const unavailableActionLabel = attendanceWindow.waitingForCheckout
+    ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
+    : shiftData?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT';
 
   async function loadAttendance() {
     const token = localStorage.getItem('attendance_token');
@@ -550,7 +584,6 @@ function AdminAttendanceWorkArea({ user }) {
     const historyToday = (historyBody.data || []).find((record) => new Date(record.attendance_date).toDateString() === new Date().toDateString());
     setShiftData(shiftBody.data || null);
     setToday({ ...historyToday, ...current });
-    setCheckedIn(Boolean(current?.check_in && !current?.check_out));
   }
 
   useEffect(() => {
@@ -583,7 +616,7 @@ function AdminAttendanceWorkArea({ user }) {
       localStorage.setItem('attendance_user', JSON.stringify({ ...user, faceRegistered: true }));
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const shiftCode = checkedIn ? today?.shift_code : realtimeShift?.code;
+    const shiftCode = attendanceWindow.actionShift?.code;
     if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
     const body = await response.json();
@@ -645,7 +678,7 @@ function AdminAttendanceWorkArea({ user }) {
         <div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>
         {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
 <button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
-<Camera size={17} />{!canAttend ? shiftData?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT' : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
+<Camera size={17} />{!canAttend ? unavailableActionLabel : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
 </button>}
         <small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small>
       </div>
@@ -721,19 +754,21 @@ function UserProfile({ user, onUserUpdated }) {
 
   return <section className="profile-page"><div className="profile-page-heading"><span className="section-label">MY PROFILE</span><h2>Hồ sơ cá nhân</h2><p>Cập nhật thông tin liên hệ hoặc đổi mật khẩu khi cần.</p></div><div className="profile-grid">
     <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={user.username} disabled /></label><label>MSSV<input value={profile.studentCode} onChange={(event) => setProfile({ ...profile, studentCode: event.target.value })} placeholder="Nhập mã số sinh viên" /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
-    <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>Mật khẩu mới cần có ít nhất 6 ký tự.</p></div><LockKeyhole size={20} /></div><label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label><label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
+    <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>{user.role === 'ADMIN' ? 'Admin đang đăng nhập có thể đặt mật khẩu mới mà không cần nhập mật khẩu cũ.' : 'Nếu chưa đổi lần đầu, dùng mật khẩu khởi tạo hiện tại.'}</p></div><LockKeyhole size={20} /></div>{user.role !== 'ADMIN' && <label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label>}<label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
   </div></section>;
 }
 
 function UserPortal({ user }) {
   const [faceModal, setFaceModal] = useState(false);
-  const [checkedIn, setCheckedIn] = useState(false);
   const [today, setToday] = useState(null);
   const [shift, setShift] = useState(null);
-  const realtimeShift = useRealtimeShift(shift);
-  const canAttend = checkedIn
-    ? Boolean(today?.shift_code && realtimeShift?.code === today.shift_code)
-    : Boolean(realtimeShift);
+  const attendanceWindow = useAttendanceWindow(shift, today);
+  const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
+  const checkedIn = attendanceWindow.action === 'CHECK_OUT';
+  const canAttend = attendanceWindow.canAttend;
+  const unavailableActionLabel = attendanceWindow.waitingForCheckout
+    ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
+    : shift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT';
   const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
 
@@ -746,7 +781,6 @@ function UserPortal({ user }) {
       fetch(`${apiUrl}/attendance/my`, { headers }).then((response) => response.json()),
     ]).then(([todayBody, shiftBody, historyBody]) => {
       setToday(todayBody.data || null);
-      setCheckedIn(Boolean(todayBody.data?.check_in && !todayBody.data?.check_out));
       setShift(shiftBody.data || null);
       setRecords(historyBody.data || []);
     }).catch(() => {});
@@ -769,7 +803,6 @@ function UserPortal({ user }) {
           ]);
           setShift(shiftBody.data || null);
           setToday(todayBody.data || null);
-          setCheckedIn(Boolean(todayBody.data?.check_in && !todayBody.data?.check_out));
           setRecords(historyBody.data || []);
         })
         .catch((requestError) => console.error('Không thể cập nhật trạng thái ca:', requestError));
@@ -793,7 +826,7 @@ function UserPortal({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const shiftCode = checkedIn ? today?.shift_code : realtimeShift?.code;
+    const shiftCode = attendanceWindow.actionShift?.code;
     if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
     const body = await response.json();
@@ -808,7 +841,6 @@ function UserPortal({ user }) {
     const refresh = await fetch(`${apiUrl}/attendance/today`, { headers });
     const refreshed = await refresh.json();
     setToday(refreshed.data || null);
-    setCheckedIn(!checkedIn);
     setFaceModal(false);
   }
 
@@ -844,7 +876,7 @@ function UserPortal({ user }) {
     <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
     <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
 <button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
-<Camera size={16} /> {!canAttend ? shift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT' : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+<Camera size={16} /> {!canAttend ? unavailableActionLabel : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
 </button>
 </div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
@@ -935,11 +967,12 @@ function AttendanceHistory({ user }) {
 
 function AdminDashboard({ user }) {
   const [faceModal, setFaceModal] = useState(false);
-  const [checkedIn, setCheckedIn] = useState(false);
   const [latestAttendance, setLatestAttendance] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [todayShift, setTodayShift] = useState(null);
-  const realtimeShift = useRealtimeShift(todayShift);
+  const attendanceWindow = useAttendanceWindow(todayShift, latestAttendance);
+  const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
+  const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const [photoPreview, setPhotoPreview] = useState(null);
   const [showAllModal, setShowAllModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -950,9 +983,10 @@ function AdminDashboard({ user }) {
   const [chartRange, setChartRange] = useState('7days');
   const [selectedDate, setSelectedDate] = useState(getVietnamDateString);
   const hasAttendanceData = dashboardStats?.trend?.some((d) => d.onTime > 0 || d.late > 0);
-  const canAttend = checkedIn
-    ? Boolean(latestAttendance?.shift_code && realtimeShift?.code === latestAttendance.shift_code)
-    : Boolean(realtimeShift);
+  const canAttend = attendanceWindow.canAttend;
+  const unavailableActionLabel = attendanceWindow.waitingForCheckout
+    ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
+    : todayShift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT';
   const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     day: '2-digit',
@@ -1026,9 +1060,8 @@ function AdminDashboard({ user }) {
       })
       .then((body) => {
         setLatestAttendance(body.data);
-        setCheckedIn(Boolean(body.data?.check_in && !body.data?.check_out));
       })
-      .catch(() => setCheckedIn(false));
+      .catch((err) => console.error('Không thể tải trạng thái chấm công:', err));
     loadActiveShifts().catch((err) => console.error('Lỗi tải trạng thái ca:', err));
     if (user.role === 'ADMIN') {
       fetch(`${apiUrl}/admin/attendance-requests?filter=all`, { headers: { Authorization: `Bearer ${token}` } })
@@ -1167,7 +1200,7 @@ function AdminDashboard({ user }) {
       user.faceRegistered = true;
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const shiftCode = checkedIn ? latestAttendance?.shift_code : realtimeShift?.code;
+    const shiftCode = attendanceWindow.actionShift?.code;
     if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
     const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
       method: 'POST',
@@ -1176,7 +1209,6 @@ function AdminDashboard({ user }) {
     });
     const body = await response.json();
     if (!response.ok || !body.success) throw new Error(body.message || 'Không thể ghi nhận chấm công.');
-    setCheckedIn(!checkedIn);
     const refresh = await fetch(`${apiUrl}/attendance/today`, { headers: { Authorization: `Bearer ${token}` } });
     const refreshedBody = await refresh.json();
     setLatestAttendance(refreshedBody.data);
@@ -1240,7 +1272,7 @@ function AdminDashboard({ user }) {
                 setFaceModal(true);
               }}
             >
-              {!canAttend ? todayShift?.shifts?.length ? 'CHƯA ĐẾN GIỜ CA' : 'CA ĐANG TẮT' : checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+              {!canAttend ? unavailableActionLabel : checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
             </button>
           </div>
         </div>
@@ -2273,7 +2305,20 @@ function loadFaceModelsOnce() {
       faceapi.nets.faceRecognitionNet.loadFromUri(url),
     ]);
 
-    faceModelsPromise = loadFrom(localUrl)
+    const initializeBackend = async () => {
+      try {
+        const initialized = await faceapi.tf.setBackend('webgl');
+        if (!initialized) throw new Error('WebGL backend is unavailable.');
+      } catch (webglError) {
+        console.warn('WebGL không khả dụng, chuyển sang CPU cho nhận diện khuôn mặt.', webglError);
+        const initialized = await faceapi.tf.setBackend('cpu');
+        if (!initialized) throw new Error('Không thể khởi tạo backend nhận diện khuôn mặt.');
+      }
+      await faceapi.tf.ready();
+    };
+
+    faceModelsPromise = initializeBackend()
+      .then(() => loadFrom(localUrl))
       .catch((localError) => {
         console.warn('Không tải được model khuôn mặt từ server, thử tải từ CDN.', localError);
         return loadFrom(cdnUrl);
@@ -2289,6 +2334,9 @@ function loadFaceModelsOnce() {
 function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const cameraReadyRef = useRef(false);
+  const modelsLoadedRef = useRef(false);
+  const warmupPromiseRef = useRef(null);
   const [cameraState, setCameraState] = useState('starting');
   const [cameraError, setCameraError] = useState('');
   const [modelReady, setModelReady] = useState(false);
@@ -2297,6 +2345,23 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
 
   useEffect(() => {
     let cancelled = false;
+
+    function warmModelsWhenReady() {
+      if (cancelled || !cameraReadyRef.current || !modelsLoadedRef.current || warmupPromiseRef.current) return;
+      const video = videoRef.current;
+      if (!video?.videoWidth) return;
+      warmupPromiseRef.current = faceapi
+        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.35 }))
+        .withFaceLandmarks()
+        .withFaceDescriptor()
+        .then(() => {
+          if (!cancelled) setModelReady(true);
+        })
+        .catch((error) => {
+          console.error('Không thể khởi tạo model nhận diện khuôn mặt.', error);
+          if (!cancelled) setModelError('Không thể khởi tạo model khuôn mặt. Hãy kiểm tra trình duyệt và thử lại.');
+        });
+    }
 
     async function startVideo() {
       if (!isSecureCameraContext()) {
@@ -2312,7 +2377,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { width: { ideal: 480 }, height: { ideal: 360 }, facingMode: 'user' },
+          video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
         });
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
@@ -2322,7 +2387,11 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
-          if (!cancelled) setCameraState('ready');
+          if (!cancelled) {
+            cameraReadyRef.current = true;
+            setCameraState('ready');
+            warmModelsWhenReady();
+          }
         }
       } catch (error) {
         if (cancelled) return;
@@ -2336,7 +2405,10 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     async function loadModelsOnce() {
       try {
         await loadFaceModelsOnce();
-        if (!cancelled) setModelReady(true);
+        if (!cancelled) {
+          modelsLoadedRef.current = true;
+          warmModelsWhenReady();
+        }
       } catch (error) {
         console.error('Không thể tải model nhận diện khuôn mặt.', error);
         if (!cancelled) setModelError('Không thể tải model khuôn mặt. Hãy kiểm tra kết nối mạng rồi mở lại camera.');
@@ -2360,6 +2432,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     setSubmitting(true);
     setCameraError('');
     try {
+      const scanStartedAt = performance.now();
       let descriptor = [];
       const video = videoRef.current;
       const [detection, imageData] = await Promise.all([
@@ -2371,9 +2444,9 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
           : Promise.resolve(null),
         compressWebcamFrame(video),
       ]);
-      if (detection) {
-        descriptor = Array.from(detection.descriptor);
-      }
+      if (!detection) throw new Error('Chưa phát hiện khuôn mặt. Hãy nhìn thẳng vào camera trong khung hình rồi thử lại.');
+      descriptor = Array.from(detection.descriptor);
+      console.info(`Face scan completed in ${Math.round(performance.now() - scanStartedAt)}ms.`);
       await onSuccess(descriptor, imageData);
       onClose();
     } catch (error) {

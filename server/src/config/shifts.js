@@ -1,7 +1,7 @@
 export const DEFAULT_SHIFTS = [
-  { code: 'MORNING', name: 'Ca sáng', start: '07:30:00', end: '12:00:00' },
-  { code: 'AFTERNOON', name: 'Ca chiều', start: '13:30:00', end: '17:30:00' },
-  { code: 'EVENING', name: 'Ca tối', start: '18:00:00', end: '20:00:00' },
+  { code: 'MORNING', name: 'Ca Sáng', start: '07:30:00', end: '12:00:00' },
+  { code: 'AFTERNOON', name: 'Ca Chiều', start: '13:30:00', end: '17:30:00' },
+  { code: 'EVENING', name: 'Ca Tối', start: '18:00:00', end: '20:00:00' },
 ];
 
 /**
@@ -57,4 +57,3 @@ export function getCurrentShift(now = new Date(), shiftSettings = { morningEnabl
       && (isLastShift ? minutes <= endMinutes : minutes < endMinutes);
   }) || enabledShifts[0] || null;
 }
-

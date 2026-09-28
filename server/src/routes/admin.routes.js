@@ -115,7 +115,7 @@ router.post('/attendance/import-excel', async (request, response, next) => {
         continue;
       }
       const validDate = /^\d{4}-\d{2}-\d{2}$/.test(record.date);
-      const allowedShifts = { MORNING: ['Ca sáng', '07:30:00', '12:00:00'], AFTERNOON: ['Ca chiều', '13:30:00', '17:30:00'], EVENING: ['Ca tối', '17:30:00', '20:00:00'] };
+      const allowedShifts = { MORNING: ['Ca Sáng', '07:30:00', '12:00:00'], AFTERNOON: ['Ca Chiều', '13:30:00', '17:30:00'], EVENING: ['Ca Tối', '17:30:00', '20:00:00'] };
       const shift = allowedShifts[record.shiftCode];
       if (!validDate || !shift) continue;
       await connection.execute(

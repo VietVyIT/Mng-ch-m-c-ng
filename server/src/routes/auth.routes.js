@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { pool } from '../config/database.js';
 import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
+import { matchesInitialPassword } from '../utils/initial-password.js';
 import { sendOtpMessage, isEmail, isPhone } from '../utils/mailer.js';
 
 const router = Router();
@@ -93,19 +94,16 @@ router.post('/login', async (request, response, next) => {
     let hintMessage = '';
 
     if (user.role === 'ADMIN' || user.username === 'admin') {
-      passwordMatches = (user.password_hash ? await bcrypt.compare(password, user.password_hash) : false) || (password === 'admin123') || (password === process.env.ADMIN_SECRET_KEY);
+      passwordMatches = (user.password_hash ? await bcrypt.compare(password, user.password_hash) : false)
+        || matchesInitialPassword(password, user);
       hintMessage = 'Mật khẩu Admin không đúng!';
     } else {
-      passwordMatches = user.password_hash ? await bcrypt.compare(password, user.password_hash) : false;
-      const isDefaultAllowed = Boolean(user.must_change_password);
-      
-      if (!user.student_code || user.student_code.trim() === '' || user.student_code === 'Chưa có MSSV') {
-        if (!passwordMatches && isDefaultAllowed && password === 'user123') passwordMatches = true;
-        if (!passwordMatches) hintMessage = 'Mật khẩu không đúng. (Gợi ý: Mật khẩu mặc định là "user123" do bạn chưa có MSSV)';
-      } else {
-        if (!passwordMatches && isDefaultAllowed && password === user.student_code) passwordMatches = true;
-        if (!passwordMatches) hintMessage = `Mật khẩu không đúng. (Gợi ý: Mật khẩu mặc định là MSSV "${user.student_code}")`;
-      }
+      passwordMatches = (user.password_hash ? await bcrypt.compare(password, user.password_hash) : false)
+        || matchesInitialPassword(password, user);
+      const initialPasswordHint = user.student_code?.trim()
+        ? `MSSV "${user.student_code}", "user123" hoặc "user123@"`
+        : '"user123" hoặc "user123@"';
+      if (!passwordMatches) hintMessage = `Mật khẩu không đúng. Mật khẩu khởi tạo có thể là ${initialPasswordHint}.`;
     }
 
     if (!passwordMatches) {
@@ -571,15 +569,33 @@ router.patch('/profile', authenticate, async (request, response, next) => {
 router.patch('/password', authenticate, async (request, response, next) => {
   try {
     const { currentPassword, newPassword } = request.body;
-    if (!currentPassword || !newPassword || newPassword.length < 6) {
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
       return response.status(400).json({ success: false, message: 'Mật khẩu mới phải có ít nhất 6 ký tự.', errorCode: 'VALIDATION_ERROR' });
     }
-    const [rows] = await pool.execute('SELECT password_hash FROM users WHERE id = ? LIMIT 1', [request.user.userId]);
-    if (!rows[0] || !(await bcrypt.compare(currentPassword, rows[0].password_hash))) {
-      return response.status(400).json({ success: false, message: 'Mật khẩu hiện tại không đúng.', errorCode: 'INVALID_PASSWORD' });
+    const [rows] = await pool.execute(
+      'SELECT password_hash, role, student_code, must_change_password FROM users WHERE id = ? LIMIT 1',
+      [request.user.userId],
+    );
+    const user = rows[0];
+    if (!user) {
+      return response.status(404).json({ success: false, message: 'Không tìm thấy tài khoản.', errorCode: 'USER_NOT_FOUND' });
+    }
+    if (user.role !== 'ADMIN') {
+      if (typeof currentPassword !== 'string' || !currentPassword) {
+        return response.status(400).json({ success: false, message: 'Vui lòng nhập mật khẩu hiện tại.', errorCode: 'VALIDATION_ERROR' });
+      }
+      const matchesHash = user.password_hash
+        ? await bcrypt.compare(currentPassword, user.password_hash)
+        : false;
+      if (!matchesHash && !matchesInitialPassword(currentPassword, user)) {
+        return response.status(400).json({ success: false, message: 'Mật khẩu hiện tại không đúng.', errorCode: 'INVALID_PASSWORD' });
+      }
     }
     const passwordHash = await bcrypt.hash(newPassword, 12);
-    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [passwordHash, request.user.userId]);
+    await pool.execute(
+      'UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?',
+      [passwordHash, request.user.userId],
+    );
     return response.json({ success: true, message: 'Đã đổi mật khẩu thành công.' });
   } catch (error) {
     return next(error);
@@ -587,5 +603,3 @@ router.patch('/password', authenticate, async (request, response, next) => {
 });
 
 export default router;
-
-

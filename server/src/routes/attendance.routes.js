@@ -1,6 +1,9 @@
 import express from 'express';
 import db from '../config/database.js';
+import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
+import { canCheckInAt, canCheckOutAt } from '../utils/attendance-window.js';
+import { cosineSimilarity, validateEmbedding } from '../utils/face.js';
 
 const router = express.Router();
 
@@ -9,6 +12,12 @@ const toMinutes = (timeStr) => {
   if (!timeStr) return 0;
   const parts = timeStr.slice(0, 5).split(':').map(Number);
   return (parts[0] || 0) * 60 + (parts[1] || 0);
+};
+
+const toSeconds = (timeStr) => {
+  if (!timeStr) return 0;
+  const [hours = 0, minutes = 0, seconds = 0] = String(timeStr).split(':').map(Number);
+  return hours * 3600 + minutes * 60 + seconds;
 };
 
 const getVietnamDateTime = (date = new Date()) => {
@@ -29,21 +38,31 @@ const getVietnamDateTime = (date = new Date()) => {
   };
 };
 
-async function ensureReviewStatusColumns() {
-  const [columns] = await db.query(
-    `SELECT COLUMN_NAME FROM information_schema.COLUMNS
-     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'attendance_logs'
-       AND COLUMN_NAME IN ('check_in_status', 'check_out_status')`,
-  );
-  const existing = new Set(columns.map((column) => column.COLUMN_NAME));
-  if (!existing.has('check_in_status')) {
-    await db.query("ALTER TABLE attendance_logs ADD COLUMN check_in_status VARCHAR(20) NOT NULL DEFAULT 'PENDING'");
-    await db.query("UPDATE attendance_logs SET check_in_status = status WHERE check_in_time IS NOT NULL AND status IN ('APPROVED', 'REJECTED')");
+let reviewStatusColumnsPromise;
+
+function ensureReviewStatusColumns() {
+  if (!reviewStatusColumnsPromise) {
+    reviewStatusColumnsPromise = (async () => {
+      const [columns] = await db.query(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'attendance_logs'
+           AND COLUMN_NAME IN ('check_in_status', 'check_out_status')`,
+      );
+      const existing = new Set(columns.map((column) => column.COLUMN_NAME));
+      if (!existing.has('check_in_status')) {
+        await db.query("ALTER TABLE attendance_logs ADD COLUMN check_in_status VARCHAR(20) NOT NULL DEFAULT 'PENDING'");
+        await db.query("UPDATE attendance_logs SET check_in_status = status WHERE check_in_time IS NOT NULL AND status IN ('APPROVED', 'REJECTED')");
+      }
+      if (!existing.has('check_out_status')) {
+        await db.query("ALTER TABLE attendance_logs ADD COLUMN check_out_status VARCHAR(20) NOT NULL DEFAULT 'PENDING'");
+        await db.query("UPDATE attendance_logs SET check_out_status = status WHERE check_out_time IS NOT NULL AND status IN ('APPROVED', 'REJECTED')");
+      }
+    })().catch((error) => {
+      reviewStatusColumnsPromise = null;
+      throw error;
+    });
   }
-  if (!existing.has('check_out_status')) {
-    await db.query("ALTER TABLE attendance_logs ADD COLUMN check_out_status VARCHAR(20) NOT NULL DEFAULT 'PENDING'");
-    await db.query("UPDATE attendance_logs SET check_out_status = status WHERE check_out_time IS NOT NULL AND status IN ('APPROVED', 'REJECTED')");
-  }
+  return reviewStatusColumnsPromise;
 }
 
 const shiftSettingColumns = {
@@ -52,38 +71,97 @@ const shiftSettingColumns = {
   EVENING: 'evening_enabled',
 };
 
-async function getShiftAvailability(shiftCode) {
+async function getShiftAvailability(shiftCode, action) {
   const settingColumn = shiftSettingColumns[shiftCode];
   if (!settingColumn) return null;
   const { date, time } = getVietnamDateTime();
   const [rows] = await db.query(
     `SELECT id, name, start_time, end_time, is_active
-     FROM shifts WHERE id = ? LIMIT 1`,
-    [shiftCode],
+     FROM shifts ORDER BY FIELD(id, 'MORNING', 'AFTERNOON', 'EVENING')`,
   );
-  const shift = rows[0];
+  const shift = rows.find((row) => row.id === shiftCode);
   if (!shift || Number(shift.is_active) !== 1) return null;
-  const currentMinutes = toMinutes(time);
-  if (currentMinutes < toMinutes(shift.start_time) || currentMinutes >= toMinutes(shift.end_time)) return null;
+  const currentSeconds = toSeconds(time);
+  const startSeconds = toSeconds(shift.start_time);
+  const endSeconds = toSeconds(shift.end_time);
+  if (action === 'CHECK_IN') {
+    if (!canCheckInAt(currentSeconds, startSeconds, endSeconds)) return null;
+  } else {
+    const nextShift = rows
+      .filter((row) => toSeconds(row.start_time) >= endSeconds)
+      .sort((left, right) => toSeconds(left.start_time) - toSeconds(right.start_time))[0];
+    const checkoutClosesAt = nextShift ? toSeconds(nextShift.start_time) : 24 * 60 * 60;
+    if (!canCheckOutAt(currentSeconds, startSeconds, endSeconds, checkoutClosesAt)) return null;
+  }
   return { ...shift, date, time };
 }
 
 // 1. API CHECK-IN
 router.post('/check-in', authenticate, async (req, res) => {
+  let connection;
   try {
     await ensureReviewStatusColumns();
-    const { image, imageData, shift, mssv, fullName } = req.body;
+    const { image, imageData, embedding, shift } = req.body;
     const finalImage = image || imageData || null;
-    const userMssv = mssv || req.user?.mssv || req.user?.username || 'N/A';
-    const userName = fullName || req.user?.fullName || req.user?.name || 'Sinh viên';
+    if (!validateEmbedding(embedding)) {
+      return res.status(400).json({ success: false, message: 'Không nhận diện được khuôn mặt. Hãy nhìn thẳng vào camera và thử lại.' });
+    }
+    const shiftInfo = await getShiftAvailability(shift, 'CHECK_IN');
+    if (!shiftInfo) {
+      return res.status(400).json({ success: false, message: 'Chỉ được check-in trong giờ ca đã bật, bắt đầu từ giờ vào ca.' });
+    }
+
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [users] = await connection.query(
+      'SELECT id, username, student_code, full_name, face_embedding FROM users WHERE id = ? FOR UPDATE',
+      [req.user.userId],
+    );
+    const user = users[0];
+    if (!user) {
+      await connection.rollback();
+      return res.status(401).json({ success: false, message: 'Không tìm thấy tài khoản đăng nhập.' });
+    }
+    const storedEmbedding = typeof user.face_embedding === 'string'
+      ? JSON.parse(user.face_embedding)
+      : user.face_embedding;
+    if (!validateEmbedding(storedEmbedding)) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt. Hãy đăng ký rồi thử chấm công lại.' });
+    }
+    if (cosineSimilarity(embedding, storedEmbedding) < env.faceMatchThreshold) {
+      await connection.rollback();
+      return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.' });
+    }
+    const userMssv = user.student_code || user.username;
+    const identifiers = [...new Set([user.username, user.student_code].filter(Boolean))];
+    const placeholders = identifiers.map(() => '?').join(', ');
+    const [existing] = await connection.query(
+      `SELECT id FROM attendance_logs
+       WHERE mssv IN (${placeholders}) AND work_date = ? AND shift = ?
+         AND check_in_time IS NOT NULL
+       LIMIT 1 FOR UPDATE`,
+      [...identifiers, shiftInfo.date, shift],
+    );
+    const [modernExisting] = await connection.query(
+      `SELECT id FROM attendance
+       WHERE user_id = ? AND attendance_date = ? AND shift_code = ?
+       LIMIT 1 FOR UPDATE`,
+      [user.id, shiftInfo.date, shift],
+    );
+    const [importedExisting] = await connection.query(
+      `SELECT id FROM imported_attendance_records
+       WHERE user_id = ? AND attendance_date = ? AND shift_code = ?
+       LIMIT 1 FOR UPDATE`,
+      [user.id, shiftInfo.date, shift],
+    );
+    if (existing.length || modernExisting.length || importedExisting.length) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'Bạn đã check-in ca này rồi. Mỗi ca chỉ được check-in một lần.' });
+    }
 
     let isLate = 0;
     let lateMinutes = 0;
-
-    const shiftInfo = await getShiftAvailability(shift);
-    if (!shiftInfo) {
-      return res.status(400).json({ success: false, message: 'Ca đã tắt hoặc chưa đến giờ bắt đầu/kết thúc ca.' });
-    }
     const checkDate = shiftInfo.date;
     const checkTime = shiftInfo.time;
     const fullDateTime = `${checkDate} ${checkTime}`;
@@ -94,63 +172,108 @@ router.post('/check-in', authenticate, async (req, res) => {
       lateMinutes = curMin - startMin;
     }
 
-    await db.query(
+    await connection.query(
       `INSERT INTO attendance_logs 
        (mssv, full_name, shift, work_date, check_in_time, check_in_image, status, check_in_status, is_late, late_minutes)
        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 'PENDING', ?, ?)`,
-      [userMssv, userName, shift, checkDate, fullDateTime, finalImage, isLate, lateMinutes]
+      [userMssv, user.full_name, shift, checkDate, fullDateTime, finalImage, isLate, lateMinutes]
     );
 
+    await connection.commit();
     return res.status(200).json({
       success: true,
+      data: { shift_code: shift, check_in: fullDateTime, is_late: Boolean(isLate) },
       message: isLate ? `Check-in thành công (Trễ ${lateMinutes} phút)` : 'Check-in đúng giờ thành công!'
     });
   } catch (error) {
+    if (connection) await connection.rollback();
     console.error("CHECK-IN ERROR:", error);
     return res.status(500).json({ success: false, message: 'Lỗi server: ' + error.message });
+  } finally {
+    connection?.release();
   }
 });
 
 // 2. API CHECK-OUT
 router.post('/check-out', authenticate, async (req, res) => {
+  let connection;
   try {
     await ensureReviewStatusColumns();
-    const { image, imageData, shift, mssv, fullName } = req.body;
+    const { image, imageData, embedding, shift } = req.body;
     const finalImage = image || imageData || null;
-    const userMssv = mssv || req.user?.mssv || req.user?.username || 'N/A';
-    const userName = fullName || req.user?.fullName || req.user?.name || 'Sinh viên';
-
-    const shiftInfo = await getShiftAvailability(shift);
+    if (!validateEmbedding(embedding)) {
+      return res.status(400).json({ success: false, message: 'Không nhận diện được khuôn mặt. Hãy nhìn thẳng vào camera và thử lại.' });
+    }
+    const shiftInfo = await getShiftAvailability(shift, 'CHECK_OUT');
     if (!shiftInfo) {
-      return res.status(400).json({ success: false, message: 'Ca đã tắt hoặc chưa đến giờ bắt đầu/kết thúc ca.' });
+      return res.status(400).json({ success: false, message: 'Chỉ được check-out từ 5 phút trước giờ hết ca đến trước giờ bắt đầu ca tiếp theo.' });
     }
     const checkDate = shiftInfo.date;
     const fullDateTime = `${checkDate} ${shiftInfo.time}`;
 
-    const [rows] = await db.query(
-      `SELECT id FROM attendance_logs 
-       WHERE (mssv = ? OR full_name = ?) AND work_date = ? AND shift = ?
-       ORDER BY id DESC LIMIT 1`,
-      [userMssv, userName, checkDate, shift]
+    connection = await db.getConnection();
+    await connection.beginTransaction();
+    const [users] = await connection.query(
+      'SELECT id, username, student_code, full_name, face_embedding FROM users WHERE id = ? FOR UPDATE',
+      [req.user.userId],
+    );
+    const user = users[0];
+    if (!user) {
+      await connection.rollback();
+      return res.status(401).json({ success: false, message: 'Không tìm thấy tài khoản đăng nhập.' });
+    }
+    const storedEmbedding = typeof user.face_embedding === 'string'
+      ? JSON.parse(user.face_embedding)
+      : user.face_embedding;
+    if (!validateEmbedding(storedEmbedding)) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'Bạn chưa đăng ký khuôn mặt. Hãy đăng ký rồi thử chấm công lại.' });
+    }
+    if (cosineSimilarity(embedding, storedEmbedding) < env.faceMatchThreshold) {
+      await connection.rollback();
+      return res.status(403).json({ success: false, message: 'Khuôn mặt không khớp với tài khoản.' });
+    }
+    const identifiers = [...new Set([user.username, user.student_code].filter(Boolean))];
+    const placeholders = identifiers.map(() => '?').join(', ');
+    const [rows] = await connection.query(
+      `SELECT id, check_out_time FROM attendance_logs
+       WHERE mssv IN (${placeholders}) AND work_date = ? AND shift = ?
+         AND check_in_time IS NOT NULL
+       ORDER BY id DESC LIMIT 1 FOR UPDATE`,
+      [...identifiers, checkDate, shift],
     );
 
-    if (rows.length === 0) {
+    if (!rows.length) {
+      await connection.rollback();
       return res.status(400).json({ success: false, message: 'Bạn chưa check-in ca này nên không thể check-out.' });
     }
-    await db.query(
+    if (rows[0].check_out_time) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'Bạn đã check-out ca này rồi. Mỗi ca chỉ được check-out một lần.' });
+    }
+    const [updateResult] = await connection.query(
       `UPDATE attendance_logs
        SET check_out_time = ?, check_out_image = ?, check_out_status = 'PENDING', status = 'PENDING'
-       WHERE id = ?`,
+       WHERE id = ? AND check_out_time IS NULL`,
       [fullDateTime, finalImage, rows[0].id]
     );
+    if (!updateResult.affectedRows) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'Ca này đã được check-out trước đó.' });
+    }
 
+    await connection.commit();
     return res.status(200).json({
       success: true,
+      data: { shift_code: shift, check_out: fullDateTime },
       message: 'Xác nhận check-out thành công! Chờ Admin phê duyệt.'
     });
   } catch (error) {
+    if (connection) await connection.rollback();
     console.error("CHECK-OUT ERROR:", error);
     return res.status(500).json({ success: false, message: 'Lỗi server: ' + error.message });
+  } finally {
+    connection?.release();
   }
 });
 
@@ -170,14 +293,21 @@ router.get('/shifts', async (req, res) => {
 // Thêm lại các route GET bị thiếu
 router.get('/today', authenticate, async (req, res) => {
   try {
-    const userMssv = req.user?.mssv || req.user?.username;
+    const { date } = getVietnamDateTime();
+    const [users] = await db.query(
+      'SELECT username, student_code, full_name FROM users WHERE id = ? LIMIT 1',
+      [req.user.userId],
+    );
+    if (!users[0]) return res.status(401).json({ success: false, message: 'Không tìm thấy tài khoản đăng nhập.' });
+    const identifiers = [...new Set([users[0].username, users[0].student_code].filter(Boolean))];
+    const placeholders = identifiers.map(() => '?').join(', ');
     const [rows] = await db.query(
       `SELECT id, work_date as attendance_date, shift as shift_code, shift as shift_name,
               check_in_time as check_in, check_out_time as check_out, status, is_late, late_minutes
        FROM attendance_logs 
-       WHERE mssv = ? AND work_date = CURRENT_DATE 
+       WHERE mssv IN (${placeholders}) AND work_date = ?
        ORDER BY check_in_time DESC LIMIT 1`,
-      [userMssv]
+      [...identifiers, date]
     );
     return res.json({ success: true, data: rows[0] || null });
   } catch (error) {
@@ -192,19 +322,24 @@ router.get('/shifts/today', authenticate, async (req, res) => {
        FROM shifts
        ORDER BY FIELD(id, 'MORNING', 'AFTERNOON', 'EVENING')`,
     );
-    const shifts = rows
-      .filter((row) => Number(row.is_active) === 1)
-      .map((row) => ({
-        code: row.id,
-        name: row.name,
-        start: row.start_time,
-        end: row.end_time,
-      }));
+    const allShifts = rows.map((row) => ({
+      code: row.id,
+      name: {
+        MORNING: 'Ca Sáng',
+        AFTERNOON: 'Ca Chiều',
+        EVENING: 'Ca Tối',
+      }[row.id] || row.name,
+      start: row.start_time,
+      end: row.end_time,
+      isActive: Number(row.is_active) === 1,
+    }));
+    const shifts = allShifts.filter((shift) => shift.isActive);
     const isOpen = (shiftCode) => shifts.some((shift) => shift.code === shiftCode);
     return res.json({
       success: true,
       data: {
         shifts,
+        allShifts,
         morningEnabled: isOpen('MORNING'),
         afternoonEnabled: isOpen('AFTERNOON'),
         eveningEnabled: isOpen('EVENING'),

@@ -79,6 +79,19 @@ export const initDatabase = async () => {
       console.warn("Alter table notices:", e.message);
     }
 
+    await connection.query(
+      `UPDATE users
+       SET password_hash = ?, must_change_password = TRUE
+       WHERE username = 'admin'
+         AND role = 'ADMIN'
+         AND password_hash = ?
+         AND must_change_password = FALSE`,
+      [
+        '$2b$10$7AZG/p6hwpkEkwnU/6wVROpWdHEyJ/m9t2BzI1KB3y5EPoOzOwzce',
+        '$2b$10$HW66dep9uV0JpPZiY.kmf.ckc4KZuInwVuYjdXHGL0mdT4BQuT/3y',
+      ],
+    );
+
     connection.release();
     console.log("Database migration completed.");
   } catch (err) {

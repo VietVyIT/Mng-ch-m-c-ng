@@ -3,11 +3,20 @@ import { pool } from '../config/database.js';
 
 const router = express.Router();
 
+const shiftNames = {
+  MORNING: 'Ca Sáng',
+  AFTERNOON: 'Ca Chiều',
+  EVENING: 'Ca Tối',
+};
+
 router.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute('SELECT id, name, start_time, end_time, is_active FROM shifts ORDER BY FIELD(id, "MORNING", "AFTERNOON", "EVENING")');
     if (!rows.length) throw new Error('Không tìm thấy ca làm việc nào trong hệ thống.');
-    return response.json({ success: true, data: rows });
+    return response.json({
+      success: true,
+      data: rows.map((shift) => ({ ...shift, name: shiftNames[shift.id] || shift.name })),
+    });
   } catch (error) {
     return next(error);
   }
