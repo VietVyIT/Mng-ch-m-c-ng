@@ -270,6 +270,23 @@ async function compressWebcamFrame(video) {
   return canvas.toDataURL('image/jpeg', 0.7);
 }
 
+async function registerFaceEmbedding(user, embedding) {
+  const token = localStorage.getItem('attendance_token');
+  const response = await fetch(`${apiUrl}/face/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ embedding }),
+  });
+  const body = await response.json();
+  if (!response.ok || !body.success) {
+    throw new Error(body.message || 'Không thể cập nhật khuôn mặt.');
+  }
+  const updatedUser = { ...user, faceRegistered: true };
+  Object.assign(user, updatedUser);
+  localStorage.setItem('attendance_user', JSON.stringify(updatedUser));
+  return body;
+}
+
 
 function formatDisplayTime(timeStr) {
   if (!timeStr) return '--:--';
@@ -609,11 +626,7 @@ function AdminAttendanceWorkArea({ user }) {
     const token = localStorage.getItem('attendance_token');
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     if (!checkedIn && !user.faceRegistered) {
-      const registerResponse = await fetch(`${apiUrl}/face/register`, { method: 'POST', headers, body: JSON.stringify({ embedding }) });
-      const registerBody = await registerResponse.json();
-      if (!registerResponse.ok || !registerBody.success) throw new Error(registerBody.message || 'Không thể đăng ký khuôn mặt.');
-      user.faceRegistered = true;
-      localStorage.setItem('attendance_user', JSON.stringify({ ...user, faceRegistered: true }));
+      await registerFaceEmbedding(user, embedding);
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const shiftCode = attendanceWindow.actionShift?.code;
@@ -818,12 +831,7 @@ function UserPortal({ user }) {
     const token = localStorage.getItem('attendance_token');
     const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
     if (!checkedIn && !user.faceRegistered) {
-      const registration = await fetch(`${apiUrl}/face/register`, { method: 'POST', headers, body: JSON.stringify({ embedding }) });
-      const registrationBody = await registration.json();
-      if (!registration.ok || !registrationBody.success) throw new Error(registrationBody.message || 'Không thể đăng ký khuôn mặt.');
-      const updatedUser = { ...user, faceRegistered: true };
-      localStorage.setItem('attendance_user', JSON.stringify(updatedUser));
-      user.faceRegistered = true;
+      await registerFaceEmbedding(user, embedding);
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const shiftCode = attendanceWindow.actionShift?.code;
@@ -1188,16 +1196,7 @@ function AdminDashboard({ user }) {
   async function handleFaceSuccess(embedding, imageData) {
     const token = localStorage.getItem('attendance_token');
     if (!checkedIn && !user.faceRegistered) {
-      const registerResponse = await fetch(`${apiUrl}/face/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ embedding }),
-      });
-      const registerBody = await registerResponse.json();
-      if (!registerResponse.ok || !registerBody.success) throw new Error(registerBody.message || 'Không thể đăng ký khuôn mặt.');
-      const updatedUser = { ...user, faceRegistered: true };
-      localStorage.setItem('attendance_user', JSON.stringify(updatedUser));
-      user.faceRegistered = true;
+      await registerFaceEmbedding(user, embedding);
     }
     const endpoint = checkedIn ? 'check-out' : 'check-in';
     const shiftCode = attendanceWindow.actionShift?.code;
@@ -2343,17 +2342,32 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const [modelError, setModelError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  async function detectFace(video) {
+    const detect = () => faceapi
+      .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.3 }))
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+
+    try {
+      return await detect();
+    } catch (error) {
+      if (faceapi.tf.getBackend() !== 'webgl') throw error;
+      console.warn('WebGL lỗi khi nhận diện khuôn mặt, chuyển sang CPU và thử lại.', error);
+      const initialized = await faceapi.tf.setBackend('cpu');
+      if (!initialized) throw new Error('Không thể khởi tạo backend CPU để nhận diện khuôn mặt.');
+      await faceapi.tf.ready();
+      return detect();
+    }
+  }
+
   useEffect(() => {
     let cancelled = false;
+    const video = videoRef.current;
 
     function warmModelsWhenReady() {
       if (cancelled || !cameraReadyRef.current || !modelsLoadedRef.current || warmupPromiseRef.current) return;
-      const video = videoRef.current;
       if (!video?.videoWidth) return;
-      warmupPromiseRef.current = faceapi
-        .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.35 }))
-        .withFaceLandmarks()
-        .withFaceDescriptor()
+      warmupPromiseRef.current = detectFace(video)
         .then(() => {
           if (!cancelled) setModelReady(true);
         })
@@ -2362,6 +2376,14 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
           if (!cancelled) setModelError('Không thể khởi tạo model khuôn mặt. Hãy kiểm tra trình duyệt và thử lại.');
         });
     }
+
+    function handleVideoReady() {
+      warmModelsWhenReady();
+    }
+
+    video?.addEventListener('loadeddata', handleVideoReady);
+    video?.addEventListener('playing', handleVideoReady);
+    video?.addEventListener('resize', handleVideoReady);
 
     async function startVideo() {
       if (!isSecureCameraContext()) {
@@ -2377,16 +2399,16 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30, max: 30 }, facingMode: 'user' },
+          video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
         });
         if (cancelled) {
           stream.getTracks().forEach((track) => track.stop());
           return;
         }
         streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
+        if (video) {
+          video.srcObject = stream;
+          await video.play();
           if (!cancelled) {
             cameraReadyRef.current = true;
             setCameraState('ready');
@@ -2396,9 +2418,13 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       } catch (error) {
         if (cancelled) return;
         setCameraState('error');
-        setCameraError(error.name === 'NotAllowedError'
-          ? 'Bạn đã từ chối quyền camera. Hãy cho phép camera trong thanh địa chỉ rồi thử lại.'
-          : error.message || 'Không thể mở camera. Hãy kiểm tra quyền truy cập.');
+        const cameraErrors = {
+          NotAllowedError: 'Bạn đã từ chối quyền camera. Hãy cho phép camera trong thanh địa chỉ rồi thử lại.',
+          NotFoundError: 'Không tìm thấy camera trên thiết bị này.',
+          NotReadableError: 'Camera đang được ứng dụng khác sử dụng. Hãy đóng ứng dụng đó rồi thử lại.',
+          OverconstrainedError: 'Camera trên thiết bị không hỗ trợ cấu hình yêu cầu. Hãy thử lại hoặc dùng trình duyệt khác.',
+        };
+        setCameraError(cameraErrors[error.name] || error.message || 'Không thể mở camera. Hãy kiểm tra quyền truy cập.');
       }
     }
 
@@ -2420,6 +2446,9 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
 
     return () => {
       cancelled = true;
+      video?.removeEventListener('loadeddata', handleVideoReady);
+      video?.removeEventListener('playing', handleVideoReady);
+      video?.removeEventListener('resize', handleVideoReady);
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
@@ -2437,10 +2466,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
       const video = videoRef.current;
       const [detection, imageData] = await Promise.all([
         modelReady
-          ? faceapi
-            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 160, scoreThreshold: 0.35 }))
-            .withFaceLandmarks()
-            .withFaceDescriptor()
+          ? detectFace(video)
           : Promise.resolve(null),
         compressWebcamFrame(video),
       ]);
