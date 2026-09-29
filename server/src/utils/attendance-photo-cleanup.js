@@ -52,7 +52,7 @@ export async function cleanupExpiredAttendancePhotos() {
              check_in_image IS NOT NULL
              AND COALESCE(
                STR_TO_DATE(REPLACE(LEFT(check_in_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-               created_at
+               '1000-01-01 00:00:00'
              ) < DATE_SUB(NOW(), INTERVAL ${PHOTO_RETENTION_HOURS} HOUR),
              NULL,
              check_in_image
@@ -61,7 +61,7 @@ export async function cleanupExpiredAttendancePhotos() {
              check_out_image IS NOT NULL
              AND COALESCE(
                STR_TO_DATE(REPLACE(LEFT(check_out_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-               created_at
+               '1000-01-01 00:00:00'
              ) < DATE_SUB(NOW(), INTERVAL ${PHOTO_RETENTION_HOURS} HOUR),
              NULL,
              check_out_image
@@ -69,12 +69,12 @@ export async function cleanupExpiredAttendancePhotos() {
        WHERE (check_in_image IS NOT NULL
               AND COALESCE(
                 STR_TO_DATE(REPLACE(LEFT(check_in_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-                created_at
+                '1000-01-01 00:00:00'
               ) < DATE_SUB(NOW(), INTERVAL ${PHOTO_RETENTION_HOURS} HOUR))
           OR (check_out_image IS NOT NULL
               AND COALESCE(
                 STR_TO_DATE(REPLACE(LEFT(check_out_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-                created_at
+                '1000-01-01 00:00:00'
               ) < DATE_SUB(NOW(), INTERVAL ${PHOTO_RETENTION_HOURS} HOUR))`,
     );
     cleanupResults.push(result.affectedRows);
