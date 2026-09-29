@@ -1530,7 +1530,7 @@ function StudentManagement() {
     <div className="panel-heading">
       <div>
         <h3>Quản lý & Tra cứu ngày công</h3>
-        <p>Tìm kiếm thành viên, xóa tài khoản hoặc điều chỉnh dữ liệu import</p>
+        <p>Tìm kiếm thành viên, đặt lại khuôn mặt, xóa tài khoản hoặc điều chỉnh dữ liệu import</p>
       </div>
       {selectedIds.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1553,6 +1553,17 @@ function StudentManagement() {
             <button type="button" className="member-result-content" onClick={() => selectMember(member)}>
               <strong>{member.full_name}</strong>
               <small>{member.student_code || 'Chưa có MSSV'} · {Number(member.total_work_days || 0)} công</small>
+            </button>
+            <button
+              type="button"
+              className="secondary-button member-face-reset"
+              onClick={(event) => {
+                event.stopPropagation();
+                void resetMemberFace(member);
+              }}
+              aria-label={`Đăng ký lại khuôn mặt cho ${member.full_name}`}
+            >
+              Đặt lại mặt
             </button>
             <button
               type="button"
