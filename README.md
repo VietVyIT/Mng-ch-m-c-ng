@@ -5,7 +5,7 @@ Hệ thống tra cứu & quản lý ngày công sinh viên với nhận diện k
 **Công nghệ:** React 19 · Vite · Express · MySQL 8.0 · JWT · Face-API
 
 ---
-
+ note: cd ~/attendly/Mng-ch-m-c-ng
 ## Cài đặt
 
 ### Bước 1: Cài đặt dependencies
