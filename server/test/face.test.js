@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { averageEmbeddings, faceDistance, validateEmbedding, validateEmbeddings } from '../src/utils/face.js';
+import {
+  averageEmbeddings,
+  faceDistance,
+  parseFaceEmbedding,
+  validateEmbedding,
+  validateEmbeddings,
+} from '../src/utils/face.js';
 
 const embedding = Array(128).fill(0);
 
@@ -22,6 +28,15 @@ test('Euclidean face distance accepts the same face and rejects a different desc
 
 test('invalid face descriptors never match', () => {
   assert.equal(faceDistance(embedding, [1, 2, 3]), Number.POSITIVE_INFINITY);
+});
+
+test('stored face descriptors parse consistently from MySQL JSON strings and arrays', () => {
+  const json = JSON.stringify(embedding);
+  assert.deepEqual(parseFaceEmbedding(embedding), embedding);
+  assert.deepEqual(parseFaceEmbedding(json), embedding);
+  assert.deepEqual(parseFaceEmbedding(Buffer.from(json)), embedding);
+  assert.equal(parseFaceEmbedding('{broken'), null);
+  assert.equal(parseFaceEmbedding(null), null);
 });
 
 test('multiple valid frames are averaged to reduce single-frame recognition noise', () => {

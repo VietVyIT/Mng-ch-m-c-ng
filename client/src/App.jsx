@@ -56,8 +56,9 @@ function formatShiftName(shift) {
     MORNING: 'Ca Sáng',
     AFTERNOON: 'Ca Chiều',
     EVENING: 'Ca Tối',
+    FLEXIBLE: 'Không theo ca',
   };
-  return standardNames[shift?.code || shift?.id] || shift?.name || 'Ca làm việc';
+  return standardNames[shift?.code || shift?.id || shift?.name] || shift?.name || 'Ca làm việc';
 }
 
 if (import.meta.env.PROD && !configuredApiUrl) {
@@ -73,29 +74,29 @@ function useAttendanceWindow(shiftSettings, attendanceRecord) {
   const allShifts = [...(shiftSettings?.allShifts || shiftSettings?.shifts || [])]
     .sort((left, right) => timeToSeconds(left.start) - timeToSeconds(right.start));
   const activeShift = allShifts.find((shift) => shift.isCheckInOpen === true) || null;
-  const recordShift = allShifts.find((shift) => shift.code === attendanceRecord?.shift_code) || null;
+  const recordShift = allShifts.find((shift) => shift.code === attendanceRecord?.shift_code)
+    || (attendanceRecord?.shift_code === 'FLEXIBLE'
+      ? { code: 'FLEXIBLE', name: 'Chấm công', isCheckOutOpen: true }
+      : null);
   const hasOpenCheckIn = Boolean(attendanceRecord?.check_in && !attendanceRecord?.check_out);
 
   let checkoutShift = null;
-  if (hasOpenCheckIn && recordShift?.isCheckOutOpen === true) checkoutShift = recordShift;
+  if (hasOpenCheckIn && (recordShift?.code === 'FLEXIBLE' || recordShift?.isCheckOutOpen === true)) {
+    checkoutShift = recordShift;
+  }
 
-  const checkInShift = activeShift
-    && (!attendanceRecord?.check_in
-      || attendanceRecord.shift_code !== activeShift.code)
-    ? activeShift
+  const canStartFlexibleAttendance = !attendanceRecord?.check_in
+    || (attendanceRecord?.shift_code !== 'FLEXIBLE' && Boolean(attendanceRecord?.check_out));
+  const checkInShift = canStartFlexibleAttendance
+    ? { code: 'FLEXIBLE', name: 'Chấm công' }
     : null;
   const action = checkoutShift ? 'CHECK_OUT' : checkInShift ? 'CHECK_IN' : null;
-  const waitingForCheckout = Boolean(
-    hasOpenCheckIn
-    && recordShift
-    && recordShift.isCheckoutWaiting,
-  );
   return {
     activeShift,
     actionShift: checkoutShift || checkInShift,
     action,
     canAttend: Boolean(action),
-    waitingForCheckout,
+    waitingForCheckout: false,
   };
 }
 
@@ -258,6 +259,37 @@ async function registerFaceEmbedding(user, embeddings) {
   return body;
 }
 
+async function submitAttendance(user, action, embeddings, imageData, shiftCode) {
+  if (action === 'CHECK_IN' && !user.faceRegistered) {
+    await registerFaceEmbedding(user, embeddings);
+  }
+
+  const token = localStorage.getItem('attendance_token');
+  const request = () => fetch(`${apiUrl}/attendance/${action === 'CHECK_OUT' ? 'check-out' : 'check-in'}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      embedding: embeddings[0],
+      embeddings,
+      imageData,
+      image: imageData,
+      check_in_image: imageData,
+      shift: action === 'CHECK_IN' ? 'FLEXIBLE' : shiftCode,
+    }),
+  });
+
+  let response = await request();
+  let body = await response.json();
+  if (action === 'CHECK_IN' && !response.ok && body.errorCode === 'FACE_NOT_REGISTERED') {
+    await registerFaceEmbedding(user, embeddings);
+    response = await request();
+    body = await response.json();
+  }
+  if (!response.ok || !body.success) {
+    throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
+  }
+  return body;
+}
 
 function formatDisplayTime(timeStr) {
   if (!timeStr) return '--:--';
@@ -548,17 +580,11 @@ function AdminAttendanceWorkArea({ user }) {
   const [shiftData, setShiftData] = useState(null);
   const [today, setToday] = useState(null);
   const attendanceWindow = useAttendanceWindow(shiftData, today);
-  const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
   const [faceModal, setFaceModal] = useState(false);
   const [error, setError] = useState('');
   const [checkInFeedback, setCheckInFeedback] = useState(null);
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = !shiftData
-    ? 'ĐANG TẢI TRẠNG THÁI CA'
-    : attendanceWindow.waitingForCheckout
-      ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
-      : shiftData.shifts?.length ? 'CHƯA ĐẾN / QUA GIỜ CA' : 'CA ĐANG TẮT';
 
   async function loadAttendance() {
     const token = localStorage.getItem('attendance_token');
@@ -596,24 +622,20 @@ function AdminAttendanceWorkArea({ user }) {
   }, [canAttend]);
 
   async function handleFaceSuccess(embeddings, imageData) {
-    const token = localStorage.getItem('attendance_token');
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-    if (!checkedIn && !user.faceRegistered) {
-      await registerFaceEmbedding(user, embeddings);
-    }
-    const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const shiftCode = attendanceWindow.actionShift?.code;
-    if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding: embeddings[0], embeddings, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
-    const body = await response.json();
-    if (!response.ok || !body.success) {
-      throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
-    }
+    const body = await submitAttendance(
+      user,
+      checkedIn ? 'CHECK_OUT' : 'CHECK_IN',
+      embeddings,
+      imageData,
+      attendanceWindow.actionShift?.code,
+    );
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
     setCheckInFeedback({
       isLate,
-      message: body.message || (isLate ? 'Bạn đã check-in trễ. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.' : 'Check-in thành công, đang chờ quản trị viên duyệt.'),
+      message: body.message || (isLate
+        ? 'Bạn đã check-in trễ. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.'
+        : 'Check-in thành công, đang chờ quản trị viên duyệt.'),
     });
 
     await loadAttendance();
@@ -621,7 +643,6 @@ function AdminAttendanceWorkArea({ user }) {
   }
 
   const formatDate = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
-  const currentShiftCode = shiftData?.current?.code;
   const completed = Boolean(today?.check_in && today?.check_out);
   const statusLabel = completed ? 'Đã duyệt' : today?.status === 'PENDING' ? 'Chờ Admin duyệt' : today?.check_in ? 'Đã check-in' : 'Chưa chấm';
 
@@ -647,8 +668,7 @@ function AdminAttendanceWorkArea({ user }) {
 
     <div className="attendance-work-grid">
       <div className="content-panel shift-status-card">
-        <div className="panel-heading"><div><h3>Ca làm việc & trạng thái</h3><p>{canAttend ? `${formatShiftName(realtimeShift)} đang mở` : shiftData?.shifts?.length ? 'Chưa đến giờ ca đang mở.' : 'Tất cả ca đang tắt.'}</p></div></div>
-        <div className="shift-list">{(shiftData?.shifts || []).map((shift) => <div key={shift.code} className={`shift-option ${shift.code === realtimeShift?.code ? 'active' : ''}`}><div><strong>{formatShiftName(shift)}</strong><small>{formatDisplayTime(shift.start)} — {formatDisplayTime(shift.end)}</small></div>{shift.code === realtimeShift?.code && <span>ĐANG DIỄN RA</span>}</div>)}</div>
+        <div className="panel-heading"><div><h3>Trạng thái chấm công</h3><p>Chấm công theo tài khoản, không phân ca.</p></div></div>
         <div className="attendance-status-card">
           <div><span>Trạng thái</span><strong>{statusLabel}</strong></div>
           <div className="attendance-time-row">
@@ -664,9 +684,9 @@ function AdminAttendanceWorkArea({ user }) {
       <div className="content-panel face-action-card">
         <div className="panel-heading"><div><h3>Face ID Action</h3><p>Chụp ảnh nén để xác thực chấm công.</p></div><Camera size={20} /></div>
         <div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>
-        {completed ? <div className="completed-badge">✓ Ca làm việc đã hoàn thành</div> : 
+        {completed ? <div className="completed-badge">✓ Chấm công hôm nay đã hoàn tất</div> :
 <button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
-<Camera size={17} />{!canAttend ? unavailableActionLabel : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
+<Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
 </button>}
         <small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small>
       </div>
@@ -751,14 +771,8 @@ function UserPortal({ user }) {
   const [today, setToday] = useState(null);
   const [shift, setShift] = useState(null);
   const attendanceWindow = useAttendanceWindow(shift, today);
-  const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = !shift
-    ? 'ĐANG TẢI TRẠNG THÁI CA'
-    : attendanceWindow.waitingForCheckout
-      ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
-      : shift.shifts?.length ? 'CHƯA ĐẾN / QUA GIỜ CA' : 'CA ĐANG TẮT';
   const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
 
@@ -805,24 +819,20 @@ function UserPortal({ user }) {
   }, [canAttend]);
 
   async function handleFaceSuccess(embeddings, imageData) {
-    const token = localStorage.getItem('attendance_token');
-    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` };
-    if (!checkedIn && !user.faceRegistered) {
-      await registerFaceEmbedding(user, embeddings);
-    }
-    const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const shiftCode = attendanceWindow.actionShift?.code;
-    if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, { method: 'POST', headers, body: JSON.stringify({ embedding: embeddings[0], embeddings, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }) });
-    const body = await response.json();
-    if (!response.ok || !body.success) {
-      throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
-    }
+    const body = await submitAttendance(
+      user,
+      checkedIn ? 'CHECK_OUT' : 'CHECK_IN',
+      embeddings,
+      imageData,
+      attendanceWindow.actionShift?.code,
+    );
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
     setCheckInFeedback({
       isLate,
-      message: body.message || (isLate ? 'Bạn đã check-in trễ. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.' : 'Check-in thành công, đang chờ quản trị viên duyệt.'),
+      message: body.message || (isLate
+        ? 'Bạn đã check-in trễ. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.'
+        : 'Check-in thành công, đang chờ quản trị viên duyệt.'),
     });
 
     const refresh = await fetch(`${apiUrl}/attendance/today`, { headers });
@@ -861,9 +871,9 @@ function UserPortal({ user }) {
 
     <span className="overview-label">TỔNG QUAN CÁ NHÂN</span>
     <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
-    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Trạng thái hôm nay</h3><p>{realtimeShift?.name || 'Ca làm việc của bạn'}</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>{realtimeShift?.name?.toUpperCase() || 'CA LÀM VIỆC'}</span><strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : 'Chưa có ca'}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
+    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Chấm công hôm nay</h3><p>Chấm công theo tài khoản, không phân ca.</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>TRẠNG THÁI</span><strong>{todayStatus}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
 <button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
-<Camera size={16} /> {!canAttend ? unavailableActionLabel : checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
+<Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
 </button>
 </div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
@@ -949,7 +959,7 @@ function AttendanceHistory({ user }) {
     }
   }
 
-  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử chấm công của chính mình, gồm dữ liệu camera và Excel.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Nguồn</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.source || 'attendance'}-${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{record.source === 'Excel Import' ? 'Excel' : 'Camera'}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{record.shift_name || '—'}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 8 : 7} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPreview(null)}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {deleteTarget.shift_name || 'Ca làm việc'}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
+  return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử chấm công của chính mình, gồm dữ liệu camera và Excel.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Nguồn</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.source || 'attendance'}-${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{record.source === 'Excel Import' ? 'Excel' : 'Camera'}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{formatShiftName({ name: record.shift_name })}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 8 : 7} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPreview(null)}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {formatShiftName({ name: deleteTarget.shift_name })}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
 }
 
 function AdminDashboard({ user }) {
@@ -958,7 +968,6 @@ function AdminDashboard({ user }) {
   const [approvals, setApprovals] = useState([]);
   const [todayShift, setTodayShift] = useState(null);
   const attendanceWindow = useAttendanceWindow(todayShift, latestAttendance);
-  const realtimeShift = attendanceWindow.actionShift || attendanceWindow.activeShift;
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const [photoPreview, setPhotoPreview] = useState(null);
   const [showAllModal, setShowAllModal] = useState(false);
@@ -971,11 +980,7 @@ function AdminDashboard({ user }) {
   const [selectedDate, setSelectedDate] = useState(getVietnamDateString);
   const hasAttendanceData = dashboardStats?.trend?.some((d) => d.onTime > 0 || d.late > 0);
   const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = !todayShift
-    ? 'ĐANG TẢI TRẠNG THÁI CA'
-    : attendanceWindow.waitingForCheckout
-      ? 'CHECK-OUT MỞ 5 PHÚT CUỐI CA'
-      : todayShift.shifts?.length ? 'CHƯA ĐẾN / QUA GIỜ CA' : 'CA ĐANG TẮT';
+  const unavailableActionLabel = 'ĐÃ CHẤM CÔNG HÔM NAY';
   const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     day: '2-digit',
@@ -1176,22 +1181,13 @@ function AdminDashboard({ user }) {
   }
 
   async function handleFaceSuccess(embeddings, imageData) {
-    const token = localStorage.getItem('attendance_token');
-    if (!checkedIn && !user.faceRegistered) {
-      await registerFaceEmbedding(user, embeddings);
-    }
-    const endpoint = checkedIn ? 'check-out' : 'check-in';
-    const shiftCode = attendanceWindow.actionShift?.code;
-    if (!shiftCode || !canAttend) throw new Error('Ca làm hiện đang đóng. Không thể check-in hoặc check-out.');
-    const response = await fetch(`${apiUrl}/attendance/${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ embedding: embeddings[0], embeddings, imageData, image: imageData, check_in_image: imageData, shift: shiftCode, mssv: user?.mssv, fullName: user?.fullName || user?.name }),
-    });
-    const body = await response.json();
-    if (!response.ok || !body.success) {
-      throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
-    }
+    const body = await submitAttendance(
+      user,
+      checkedIn ? 'CHECK_OUT' : 'CHECK_IN',
+      embeddings,
+      imageData,
+      attendanceWindow.actionShift?.code,
+    );
     const refresh = await fetch(`${apiUrl}/attendance/today`, { headers: { Authorization: `Bearer ${token}` } });
     const refreshedBody = await refresh.json();
     setLatestAttendance(refreshedBody.data);
@@ -1229,12 +1225,8 @@ function AdminDashboard({ user }) {
           </div>
           <div className="today-status">
             <div className="shift-time">
-              <span>{realtimeShift ? formatShiftName(realtimeShift) : 'Ca làm việc'}</span>
-              <strong>{realtimeShift ? `${formatDisplayTime(realtimeShift.start)} — ${formatDisplayTime(realtimeShift.end)}` : '07:30 — 12:00'}</strong>
-            </div>
-            <div className="status-line">
-              <span>Ca khả dụng</span>
-              <strong>{todayShift?.shifts?.map(formatShiftName).join(' · ') || 'Không có ca đang mở'}</strong>
+              <span>TRẠNG THÁI HÔM NAY</span>
+              <strong>{latestAttendance?.status === 'PENDING' ? 'Chờ duyệt' : latestAttendance?.check_in ? 'Đã check-in' : 'Chưa check-in'}</strong>
             </div>
             <div className="status-line">
               <span>Check-in</span>
@@ -1246,7 +1238,7 @@ function AdminDashboard({ user }) {
             </div>
             <div className="face-preview">
               <div className="face-radar"><Camera size={24} /><i /></div>
-              <span>{checkedIn ? 'Đã check-in, có thể check-out' : 'Camera cần xác thực khuôn mặt'}</span>
+              <span>{checkedIn ? 'Đã check-in, quét mặt để check-out' : 'Quét khuôn mặt để check-in'}</span>
             </div>
             <button
               className="checkout-button face-action"
@@ -1394,6 +1386,22 @@ function StudentManagement() {
     const response = await fetch(`${apiUrl}/admin/imported-attendance/users/${member.id}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await response.json();
     if (response.ok && body.success) setSelected(body.data);
+  }
+
+  async function resetMemberFace(member) {
+    if (!window.confirm(`Xóa dữ liệu khuôn mặt đã lưu của ${member.full_name} để đăng ký lại?`)) return;
+    try {
+      const response = await fetch(`${apiUrl}/admin/users/${member.id}/face/reset`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể đặt lại khuôn mặt.');
+      setMessage(body.message);
+      await selectMember(member);
+    } catch (requestError) {
+      setMessage(requestError.message);
+    }
   }
 
   async function openMemberPhoto(record, type) {
@@ -1569,6 +1577,9 @@ function StudentManagement() {
               <p>{selected.user.student_code || 'Chưa có MSSV'} · Tổng công: <strong>{Number(selected.user.total_work_days || 0)}</strong></p>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="secondary-button" onClick={() => resetMemberFace(selected.user)}>
+                Đăng ký lại khuôn mặt
+              </button>
               <button className="danger-button" onClick={() => setConfirm({ all: true })}>
                 <Trash2 size={15} /> Xóa toàn bộ công
               </button>
@@ -1592,7 +1603,7 @@ function StudentManagement() {
           <div className="imported-record-list">
             {(selected.records || []).map((record) => (
               <div className="imported-record" key={`${record.source}-${record.id}`}>
-                <span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {record.shift_name}<small className="record-source">{record.source}</small></span>
+                <span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')} · {formatShiftName({ name: record.shift_name })}<small className="record-source">{record.source}</small></span>
                 <small>{formatDisplayTime(record.check_in) || '--:--'} — {formatDisplayTime(record.check_out) || '--:--'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status}</small>
                 {record.source === 'Camera' && (
                   <span className="record-photo-actions">
@@ -1958,7 +1969,7 @@ function ApprovalRow({ event, onPreview, onReview, onReject, processingId }) {
           {event.student_code && <span className="approval-student-code">({event.student_code})</span>}
         </strong>
         <span>
-          {event.event_type === 'CHECK_IN' ? 'Check-in' : 'Check-out'} · {event.shift_name || 'Chưa gán ca'} · {timeStr}
+          {event.event_type === 'CHECK_IN' ? 'Check-in' : 'Check-out'} · {formatShiftName({ name: event.shift_name })} · {timeStr}
         </span>
       </div>
       <div className="approval-badge-wrap">
@@ -2104,7 +2115,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
                       <td><strong>{item.full_name}</strong></td>
                       <td><span className="student-code-tag">{item.student_code || '—'}</span></td>
                       <td>{reqDate}</td>
-                      <td><span className="shift-pill">{item.shift_name || 'Ca làm'}</span></td>
+                      <td><span className="shift-pill">{formatShiftName({ name: item.shift_name })}</span></td>
                       <td><strong>{item.event_type === 'CHECK_OUT' ? 'Check-out' : 'Check-in'} · {checkInTime}</strong></td>
                       <td>
                         {isLate ? (
@@ -2228,8 +2239,8 @@ function RejectConfirmationModal({ event, reason, setReason, onConfirm, onCancel
             <strong>{event.full_name} {event.student_code && <span className="student-code-tag">{event.student_code}</span>}</strong>
           </div>
           <div className="summary-item">
-            <span className="summary-label">Ca làm việc:</span>
-            <span>{event.shift_name || 'Ca làm'} ({reqDate})</span>
+            <span className="summary-label">Loại chấm công:</span>
+            <span>{formatShiftName({ name: event.shift_name })} ({reqDate})</span>
           </div>
           <div className="summary-item">
             <span className="summary-label">Giờ Check-in:</span>

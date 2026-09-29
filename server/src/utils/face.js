@@ -4,6 +4,19 @@ export function validateEmbedding(embedding) {
     && embedding.every((value) => Number.isFinite(value));
 }
 
+export function parseFaceEmbedding(value) {
+  let embedding = value;
+  if (Buffer.isBuffer(embedding)) embedding = embedding.toString('utf8');
+  if (typeof embedding === 'string') {
+    try {
+      embedding = JSON.parse(embedding);
+    } catch {
+      return null;
+    }
+  }
+  return validateEmbedding(embedding) ? embedding : null;
+}
+
 export function validateEmbeddings(embeddings) {
   return Array.isArray(embeddings)
     && embeddings.length >= 1

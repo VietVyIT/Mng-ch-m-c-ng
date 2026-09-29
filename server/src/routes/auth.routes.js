@@ -5,6 +5,7 @@ import { pool } from '../config/database.js';
 import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { matchesInitialPassword } from '../utils/initial-password.js';
+import { parseFaceEmbedding } from '../utils/face.js';
 import { sendOtpMessage, isEmail, isPhone } from '../utils/mailer.js';
 
 const router = Router();
@@ -68,7 +69,7 @@ router.post('/login', async (request, response, next) => {
 
     const trimmedUser = username.trim();
     const [rows] = await pool.execute(
-      `SELECT id, full_name, username, email, password_hash, role, face_registered,
+      `SELECT id, full_name, username, email, password_hash, role, face_registered, face_embedding,
               must_change_password, total_work_days, student_code, phone, address,
               hometown_province_code, hometown_province_name
        FROM users
@@ -130,7 +131,7 @@ router.post('/login', async (request, response, next) => {
           username: user.username,
           email: user.email,
           role: user.role,
-          faceRegistered: Boolean(user.face_registered),
+          faceRegistered: Boolean(parseFaceEmbedding(user.face_embedding)),
           mustChangePassword: Boolean(user.must_change_password),
           totalWorkDays: Number(user.total_work_days || 0),
           studentCode: user.student_code,

@@ -4,6 +4,7 @@ import { pool } from '../config/database.js';
 import { authenticate, authorize } from '../middlewares/auth.middleware.js';
 import { DEFAULT_SHIFTS } from '../config/shifts.js';
 import { createNotification } from '../utils/notifications.js';
+import { parseFaceEmbedding } from '../utils/face.js';
 
 const router = Router();
 router.use(authenticate, authorize('ADMIN'));
@@ -161,7 +162,7 @@ router.get('/imported-attendance/users/:userId', async (request, response, next)
     const [users] = await pool.execute(
       `SELECT id, full_name, username, student_code, phone, address,
               hometown_province_code, hometown_province_name, total_work_days, total_work_hours,
-              face_registered, must_change_password, created_at, updated_at
+              face_registered, face_embedding, must_change_password, created_at, updated_at
        FROM users WHERE id = ? AND role = 'USER' LIMIT 1`,
       [request.params.userId],
     );
@@ -188,10 +189,14 @@ router.get('/imported-attendance/users/:userId', async (request, response, next)
        ORDER BY a.attendance_date DESC, a.shift_start`,
       [request.params.userId],
     );
+    const { face_embedding: faceEmbedding, ...user } = users[0];
     return response.json({
       success: true,
       data: {
-        user: users[0],
+        user: {
+          ...user,
+          face_registered: Boolean(parseFaceEmbedding(faceEmbedding)),
+        },
         records: [
           ...records.map((record) => ({ ...record, source: 'Excel Import' })),
           ...cameraRecords.map((record) => ({ ...record, source: 'Camera', imported_from_excel: false })),
@@ -313,6 +318,39 @@ router.delete('/imported-attendance/bulk-users', async (request, response, next)
     return next(error);
   } finally {
     connection.release();
+  }
+});
+
+router.post('/users/:userId/face/reset', async (request, response, next) => {
+  const targetId = Number(request.params.userId);
+  if (!Number.isInteger(targetId) || targetId <= 0) {
+    return response.status(400).json({ success: false, message: 'ID người dùng không hợp lệ.' });
+  }
+  try {
+    const [result] = await pool.execute(
+      `UPDATE users SET face_embedding = NULL, face_registered = FALSE
+       WHERE id = ? AND role = 'USER'`,
+      [targetId],
+    );
+    if (!result.affectedRows) {
+      const [users] = await pool.execute(
+        "SELECT id FROM users WHERE id = ? AND role = 'USER' LIMIT 1",
+        [targetId],
+      );
+      if (users.length) {
+        return response.json({
+          success: true,
+          message: 'Tài khoản chưa có dữ liệu khuôn mặt. Thành viên có thể đăng ký khi check-in lần tiếp theo.',
+        });
+      }
+      return response.status(404).json({ success: false, message: 'Không tìm thấy tài khoản người dùng.' });
+    }
+    return response.json({
+      success: true,
+      message: 'Đã xóa dữ liệu khuôn mặt cũ. Thành viên có thể đăng ký lại khi check-in lần tiếp theo.',
+    });
+  } catch (error) {
+    return next(error);
   }
 });
 
