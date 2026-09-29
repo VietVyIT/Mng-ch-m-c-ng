@@ -11,11 +11,12 @@ const morningStart = 7 * 60 * 60 + 30 * 60;
 const morningEnd = 12 * 60 * 60;
 const afternoonStart = 13 * 60 * 60 + 30 * 60;
 
-test('check-in opens at shift start and closes at shift end', () => {
+test('check-in opens at shift start and closes after the first two hours', () => {
+  const checkInCloses = morningStart + 2 * 60 * 60;
   assert.equal(canCheckInAt(morningStart - 1, morningStart, morningEnd), false);
   assert.equal(canCheckInAt(morningStart, morningStart, morningEnd), true);
-  assert.equal(canCheckInAt(morningEnd - 1, morningStart, morningEnd), true);
-  assert.equal(canCheckInAt(morningEnd, morningStart, morningEnd), false);
+  assert.equal(canCheckInAt(checkInCloses, morningStart, morningEnd), true);
+  assert.equal(canCheckInAt(checkInCloses + 1, morningStart, morningEnd), false);
 });
 
 test('check-out opens five minutes before shift end and closes when next shift starts', () => {
@@ -49,4 +50,10 @@ test('server attendance state respects enabled status and configured shift times
 test('an enabled shift is not check-in-open before its configured start time', () => {
   const state = getShiftAttendanceState(morningStart - 1, morningStart, morningEnd, true);
   assert.equal(state.isCheckInOpen, false);
+});
+
+test('check-in closes automatically after two hours even while the shift continues', () => {
+  const closingTime = morningStart + 2 * 60 * 60;
+  assert.equal(getShiftAttendanceState(closingTime, morningStart, morningEnd, true).isCheckInOpen, true);
+  assert.equal(getShiftAttendanceState(closingTime + 1, morningStart, morningEnd, true).isCheckInOpen, false);
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { matchesInitialPassword } from '../src/utils/initial-password.js';
 
-test('imported user can verify the recorded initial password and documented variants once', () => {
+test('user with an MSSV can use only that code as their initial password', () => {
   const importedUser = {
     role: 'USER',
     student_code: 'SV001',
@@ -10,8 +10,8 @@ test('imported user can verify the recorded initial password and documented vari
   };
 
   assert.equal(matchesInitialPassword('SV001', importedUser), true);
-  assert.equal(matchesInitialPassword('user123', importedUser), true);
-  assert.equal(matchesInitialPassword('user123@', importedUser), true);
+  assert.equal(matchesInitialPassword('user123', importedUser), false);
+  assert.equal(matchesInitialPassword('user123@', importedUser), false);
 });
 
 test('initial password fallback is disabled after the first password change', () => {
@@ -22,6 +22,7 @@ test('initial password fallback is disabled after the first password change', ()
   };
 
   assert.equal(matchesInitialPassword('SV001', user), false);
+  assert.equal(matchesInitialPassword('user123', user), false);
   assert.equal(matchesInitialPassword('user123@', user), false);
 });
 
@@ -34,7 +35,7 @@ test('user without a student code can use user123 as the import default once', (
   };
 
   assert.equal(matchesInitialPassword('user123', importedUser), true);
-  assert.equal(matchesInitialPassword('user123@', importedUser), true);
+  assert.equal(matchesInitialPassword('user123@', importedUser), false);
   assert.equal(matchesInitialPassword('user123', { ...importedUser, must_change_password: 0 }), false);
 });
 

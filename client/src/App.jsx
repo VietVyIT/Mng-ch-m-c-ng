@@ -5,20 +5,24 @@ import * as XLSX from 'xlsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   AlertTriangle,
+  Award,
   ArrowLeft,
   ArrowRight,
   BarChart3,
   Bell,
   Camera,
   CalendarCheck,
+  CalendarDays,
   Check,
   CheckCheck,
   ChevronDown,
+  CloudSun,
   Clock3,
   ExternalLink,
   Eye,
   EyeOff,
   FileClock,
+  Info,
   KeyRound,
   LayoutDashboard,
   LockKeyhole,
@@ -29,9 +33,14 @@ import {
   ShieldCheck,
   Search,
   Smartphone,
+  Settings,
+  Store,
+  Sun,
+  Moon,
   Trash2,
   UserMinus,
   UserPlus,
+  UserCheck,
   UserRound,
   UsersRound,
   X,
@@ -49,6 +58,14 @@ function getVietnamDateString(date = new Date()) {
   }).formatToParts(date);
   const part = (type) => parts.find((item) => item.type === type)?.value || '';
   return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function isAttendanceForToday(record) {
+  const attendanceDate = record?.attendance_date;
+  const dateKey = attendanceDate instanceof Date
+    ? getVietnamDateString(attendanceDate)
+    : String(attendanceDate || '').slice(0, 10);
+  return dateKey === getVietnamDateString();
 }
 
 function formatShiftName(shift) {
@@ -70,34 +87,252 @@ function timeToSeconds(value) {
   return hours * 3600 + minutes * 60 + seconds;
 }
 
-function useAttendanceWindow(shiftSettings, attendanceRecord) {
-  const allShifts = [...(shiftSettings?.allShifts || shiftSettings?.shifts || [])]
-    .sort((left, right) => timeToSeconds(left.start) - timeToSeconds(right.start));
-  const activeShift = allShifts.find((shift) => shift.isCheckInOpen === true) || null;
-  const recordShift = allShifts.find((shift) => shift.code === attendanceRecord?.shift_code)
-    || (attendanceRecord?.shift_code === 'FLEXIBLE'
-      ? { code: 'FLEXIBLE', name: 'Chấm công', isCheckOutOpen: true }
-      : null);
-  const hasOpenCheckIn = Boolean(attendanceRecord?.check_in && !attendanceRecord?.check_out);
+function getVietnamSeconds(date) {
+  const time = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).format(date);
+  return timeToSeconds(time);
+}
 
-  let checkoutShift = null;
-  if (hasOpenCheckIn && (recordShift?.code === 'FLEXIBLE' || recordShift?.isCheckOutOpen === true)) {
-    checkoutShift = recordShift;
+function getAttendanceRecords(attendanceRecord) {
+  if (Array.isArray(attendanceRecord?.records)) return attendanceRecord.records;
+  return attendanceRecord?.shift_code || attendanceRecord?.check_in ? [attendanceRecord] : [];
+}
+
+function normalizeShiftSettings(value) {
+  const rows = Array.isArray(value)
+    ? value
+    : Array.isArray(value?.allShifts)
+      ? value.allShifts
+      : Array.isArray(value?.shifts)
+        ? value.shifts
+        : [];
+  const allShifts = rows.map((shift) => {
+    const activeValue = shift.isActive ?? shift.is_active;
+    return {
+      ...shift,
+      code: shift.code || shift.id,
+      start: shift.start || shift.start_time,
+      end: shift.end || shift.end_time,
+      isActive: activeValue === true
+        || activeValue === 1
+        || activeValue === '1'
+        || String(activeValue).toLowerCase() === 'true',
+    };
+  });
+  return {
+    allShifts,
+    shifts: allShifts.filter((shift) => shift.isActive),
+  };
+}
+
+function mergeAttendanceRecords(currentRecord, nextRecord) {
+  const existing = getAttendanceRecords(currentRecord);
+  const previous = existing.find((record) => record.shift_code === nextRecord.shift_code);
+  const updated = { ...previous, ...nextRecord };
+  const records = [
+    ...existing.filter((record) => record.shift_code !== nextRecord.shift_code),
+    updated,
+  ];
+  return { ...(currentRecord || {}), ...updated, records };
+}
+
+function useAttendanceWindow(shiftSettings, attendanceRecord) {
+  const [currentTime, setCurrentTime] = useState(() => new Date());
+  useEffect(() => {
+    const interval = window.setInterval(() => setCurrentTime(new Date()), 30_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const allShifts = [...(shiftSettings?.allShifts || shiftSettings?.shifts || [])]
+    .filter((shift) => shift.isActive !== false)
+    .sort((left, right) => timeToSeconds(left.start) - timeToSeconds(right.start));
+  const records = getAttendanceRecords(attendanceRecord);
+  const now = getVietnamSeconds(currentTime);
+  const getRecord = (shift) => records.find((record) => record.shift_code === shift.code) || null;
+  const allCompleted = allShifts.length > 0 && allShifts.every((shift) => {
+    const record = getRecord(shift);
+    return Boolean(record?.check_in && record?.check_out);
+  });
+
+  let state = allCompleted ? 'ALL_COMPLETED' : 'NO_SHIFTS';
+  let actionShift = null;
+  let action = null;
+  let selectedRecord = null;
+  for (let index = 0; index < allShifts.length && !allCompleted; index += 1) {
+    const shift = allShifts[index];
+    const start = timeToSeconds(shift.start);
+    const end = timeToSeconds(shift.end);
+    const nextStart = allShifts[index + 1] ? timeToSeconds(allShifts[index + 1].start) : 24 * 60 * 60;
+    const checkoutOpens = Math.max(start, end - 5 * 60);
+    const record = getRecord(shift);
+
+    if (record?.check_in && record?.check_out) continue;
+    if (record?.check_in) {
+      if (now >= nextStart) {
+        state = 'CHECKOUT_EXPIRED';
+        actionShift = shift;
+        selectedRecord = record;
+      } else if (now >= checkoutOpens) {
+        state = 'CHECK_OUT';
+        actionShift = shift;
+        selectedRecord = record;
+        action = 'CHECK_OUT';
+      } else {
+        state = 'WAIT_CHECKOUT';
+        actionShift = shift;
+        selectedRecord = record;
+      }
+      break;
+    }
+
+    if (now < start) {
+      state = 'UPCOMING';
+      actionShift = shift;
+      break;
+    }
+    if (now <= start + 2 * 60 * 60) {
+      state = 'CHECK_IN';
+      actionShift = shift;
+      action = 'CHECK_IN';
+      break;
+    }
+    if (now < nextStart) {
+      state = 'CHECKIN_EXPIRED';
+      actionShift = shift;
+      break;
+    }
   }
 
-  const canStartFlexibleAttendance = !attendanceRecord?.check_in
-    || (attendanceRecord?.shift_code !== 'FLEXIBLE' && Boolean(attendanceRecord?.check_out));
-  const checkInShift = canStartFlexibleAttendance
-    ? { code: 'FLEXIBLE', name: 'Chấm công' }
-    : null;
-  const action = checkoutShift ? 'CHECK_OUT' : checkInShift ? 'CHECK_IN' : null;
+  const statusLabel = state === 'ALL_COMPLETED'
+    ? 'Đã hoàn tất hôm nay'
+    : state === 'CHECKIN_EXPIRED' || state === 'CHECKOUT_EXPIRED'
+      ? `Đã hết thời gian ${state === 'CHECKIN_EXPIRED' ? 'check-in' : 'check-out'}`
+    : selectedRecord?.status === 'PENDING'
+      ? 'Chờ duyệt'
+      : state === 'CHECK_IN'
+        ? `Đang mở ${formatShiftName(actionShift)}`
+        : state === 'CHECK_OUT' || state === 'WAIT_CHECKOUT'
+          ? 'Chờ check-out'
+          : state === 'NO_SHIFTS'
+            ? 'Chưa có ca làm việc'
+              : `Chưa đến giờ ${formatShiftName(actionShift)}`;
   return {
-    activeShift,
-    actionShift: checkoutShift || checkInShift,
+    activeShift: state === 'CHECK_IN' ? actionShift : null,
+    actionShift,
     action,
-    canAttend: Boolean(action),
-    waitingForCheckout: false,
+    canAttend: action !== null,
+    state,
+    statusLabel,
+    allCompleted,
+    records,
+    selectedRecord,
+    currentTime,
   };
+}
+
+function WorkShiftSchedule({ shiftSettings, attendanceWindow, attendancePage = false }) {
+  const shifts = (shiftSettings?.allShifts || shiftSettings?.shifts || [])
+    .filter((shift) => shift.isActive !== false);
+  const recordsByShift = new Map((attendanceWindow.records || []).map((record) => [record.shift_code, record]));
+
+  return (
+    <div className={`work-shift-schedule${attendancePage ? ' attendance-shift-schedule' : ''}`}>
+      <h4>Ca làm việc hôm nay</h4>
+      <div className="work-shift-list">
+        {shifts.length ? shifts.map((shift) => {
+          const record = recordsByShift.get(shift.code);
+          const shiftIcon = shift.code === 'MORNING' ? '☀️' : shift.code === 'AFTERNOON' ? '🌤️' : '🌙';
+          const badgeClass = shift.code === 'MORNING' ? 'morning' : shift.code === 'AFTERNOON' ? 'afternoon' : 'evening';
+          const status = record?.check_in && record?.check_out
+            ? { label: 'Đã hoàn thành', className: 'completed', completed: true }
+            : record?.check_in
+              ? { label: 'Chờ duyệt', className: 'pending' }
+              : attendanceWindow.actionShift?.code === shift.code
+                ? { label: 'Đang chọn', className: 'selected' }
+                : null;
+
+          return (
+            <div className="work-shift-row" key={shift.code}>
+              {attendancePage ? (
+                <span className={`attendance-shift-name ${badgeClass}`}>{shiftIcon} {formatShiftName(shift)}</span>
+              ) : (
+                <strong>{formatShiftName(shift)}</strong>
+              )}
+              <div className="work-shift-details">
+                {attendancePage && status?.completed ? (
+                  <small className={status.className}>✓ Đã hoàn thành</small>
+                ) : (
+                  <>
+                    <span>{formatDisplayTime(shift.start)} – {formatDisplayTime(shift.end)}</span>
+                    {status && <small className={status.className}>{status.label}</small>}
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        }) : (
+          <p>{shiftSettings ? 'Chưa có ca làm việc được bật.' : 'Đang tải ca làm việc...'}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ShiftAttendanceControl({ attendanceWindow, onAttend, showShiftName = true, dailyAttendance = false }) {
+  const shiftName = formatShiftName(attendanceWindow.actionShift);
+  if (attendanceWindow.state === 'ALL_COMPLETED') {
+    return <div className="completed-badge">✓ Chấm công hôm nay đã hoàn tất</div>;
+  }
+  if (attendanceWindow.state === 'CHECK_IN') {
+    return (
+      <button className="checkout-button face-action" onClick={onAttend}>
+        <Camera size={17} /> QUÉT KHUÔN MẶT CHECK-IN{showShiftName ? ` - ${shiftName}` : ''} <ArrowRight size={15} />
+      </button>
+    );
+  }
+  if (attendanceWindow.state === 'CHECK_OUT') {
+    return (
+      <button className="checkout-button face-action is-checkout" onClick={onAttend}>
+        <Camera size={17} /> QUÉT KHUÔN MẶT CHECK-OUT{showShiftName ? ` - ${shiftName}` : ''} <ArrowRight size={15} />
+      </button>
+    );
+  }
+  if (attendanceWindow.state === 'WAIT_CHECKOUT') {
+    const checkoutOpens = Math.max(
+      timeToSeconds(attendanceWindow.actionShift.start),
+      timeToSeconds(attendanceWindow.actionShift.end) - 5 * 60,
+    );
+    const opensAt = `${String(Math.floor(checkoutOpens / 3600)).padStart(2, '0')}:${String(Math.floor((checkoutOpens % 3600) / 60)).padStart(2, '0')}`;
+    if (dailyAttendance) {
+      return (
+        <button type="button" className="checkout-button attendance-checkout-locked" disabled>
+          <LockKeyhole size={16} />
+          <span>Check-out trước 5 phút trước khi hết ca (Mở lúc {opensAt})</span>
+        </button>
+      );
+    }
+    return (
+      <div className="shift-action-message">
+        <strong>Chờ duyệt</strong>
+        <span>Check-out trước 5 phút trước khi hết ca (Mở lúc {opensAt})</span>
+      </div>
+    );
+  }
+  if (attendanceWindow.state === 'CHECKIN_EXPIRED') {
+    return <div className="shift-action-message">Đã hết thời gian check-in của {shiftName}</div>;
+  }
+  if (attendanceWindow.state === 'CHECKOUT_EXPIRED') {
+    return <div className="shift-action-message">Đã hết thời gian check-out của {shiftName}</div>;
+  }
+  if (attendanceWindow.state === 'UPCOMING') {
+    return <div className="shift-action-message">Chưa đến giờ làm việc của ca tiếp theo ({shiftName} mở lúc {formatDisplayTime(attendanceWindow.actionShift.start)})</div>;
+  }
+  return <div className="shift-action-message">Chưa có ca làm việc được bật.</div>;
 }
 
 function isSecureCameraContext() {
@@ -191,8 +426,9 @@ function parseAttendanceWorkbook(buffer) {
   };
   const nameColumn = findColumn([/họ\s*&?\s*tên/i, /họ và tên/i], 1);
   const mssvColumn = findColumn([/mssv/i, /mã\s*sinh\s*viên/i, /mã\s*sv/i], 2);
+  const emailColumn = findColumn([/e[\s-]?mail/i, /địa chỉ thư điện tử/i], -1);
   const phoneColumn = findColumn([/sđt/i, /điện thoại/i, /phone/i], 4);
-  const totalColumn = findColumn([/^total$/i, /tổng\s*công/i, /tổng/i], rows[dateRowIndex].length - 1);
+  const totalColumn = findColumn([/^\s*total\s*$/i, /tổng\s*(?:ngày\s*)?công/i, /work\s*days/i], -1);
   const totalHoursColumn = findColumn([/tổng\s*giờ/i, /số\s*giờ/i], -1);
 
   const dates = [];
@@ -212,12 +448,16 @@ function parseAttendanceWorkbook(buffer) {
     const userName = cleanName(row[nameColumn]);
     if (!userName || /^stt$/i.test(userName) || /^tổng$/i.test(userName)) continue;
     const userMSSV = String(row[mssvColumn] || '').trim();
+    const email = emailColumn >= 0 ? String(row[emailColumn] || '').trim().toLowerCase() : '';
     
     const summary = {
       userName,
       userMSSV,
+      email,
       phone: cleanName(row[phoneColumn]),
-      totalWorkDays: Number(String(row[totalColumn] || '0').replace(',', '.')) || 0,
+      totalWorkDays: totalColumn >= 0 && String(row[totalColumn] || '').trim()
+        ? Number(String(row[totalColumn]).replace(',', '.'))
+        : null,
       totalHours: totalHoursColumn >= 0 ? (Number(String(row[totalHoursColumn] || '0').replace(',', '.')) || 0) : 0,
       shifts: 0
     };
@@ -227,7 +467,10 @@ function parseAttendanceWorkbook(buffer) {
       const shift = IMPORT_SHIFTS[shiftName];
       if (!dates[column] || !shift || !/^x$/i.test(String(row[column]).trim())) continue;
       summary.shifts += 1;
-      records.push({ userName, userMSSV, date: dates[column], shiftCode: shift.code, totalHours: (new Date(`1970-01-01T${shift.end}`) - new Date(`1970-01-01T${shift.start}`)) / 3600000 });
+      records.push({ userName, userMSSV, email, date: dates[column], shiftCode: shift.code, totalHours: (new Date(`1970-01-01T${shift.end}`) - new Date(`1970-01-01T${shift.start}`)) / 3600000 });
+    }
+    if (summary.totalWorkDays === null || !Number.isFinite(summary.totalWorkDays)) {
+      summary.totalWorkDays = summary.shifts;
     }
     members.set(`${userMSSV}|${userName.toLowerCase()}`, summary);
   }
@@ -290,7 +533,7 @@ async function submitAttendance(user, action, embeddings, imageData, shiftCode) 
       imageData,
       image: imageData,
       check_in_image: imageData,
-      shift: action === 'CHECK_IN' ? 'FLEXIBLE' : shiftCode,
+      shift: shiftCode,
     }),
   });
 
@@ -340,7 +583,7 @@ function App() {
         onLogin={(loggedInUser) => {
           setUser(loggedInUser);
           setShowLogin(false);
-          setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : loggedInUser.mustChangePassword ? 'Hồ sơ' : 'Chấm công');
+          setPage(loggedInUser.role === 'ADMIN' ? 'Dashboard' : 'Chấm công');
         }}
       />
     );
@@ -477,7 +720,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
     <div className="dashboard-app">
       {mobileMenu && <button className="sidebar-backdrop" aria-label="Đóng menu" onClick={() => setMobileMenu(false)} />}
       <aside className={mobileMenu ? 'sidebar sidebar-open' : 'sidebar'}>
-        <div className="sidebar-brand" role="button" tabIndex="0" aria-label="Cuộn lên đầu trang" onClick={scrollToTop} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') scrollToTop(); }}><span className="brand-square">A</span><div><strong>ATTENDLY</strong><small>Attendance system</small></div><button className="close-menu" onClick={(event) => { event.stopPropagation(); setMobileMenu(false); }}><X size={18} /></button></div>
+        <div className="sidebar-brand" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><span className="brand-square">A</span><div><strong>ATTENDLY</strong><small>Attendance system</small></div><button className="close-menu" aria-label="Đóng menu" onClick={(event) => { event.stopPropagation(); setMobileMenu(false); }}><X size={18} /></button></div>
         <span className="sidebar-caption">WORKSPACE</span>
         <nav>{navItems.map(({ label, icon: Icon }) => <button key={label} className={page === label ? 'sidebar-link active' : 'sidebar-link'} onClick={() => { onNavigate(label); setMobileMenu(false); }}><Icon size={18} />{label}</button>)}</nav>
         <div className="sidebar-bottom"><div className="account-card"><div className="user-avatar">{user.fullName?.charAt(0) || 'U'}</div><div><strong>{user.fullName || user.username}</strong><small>{user.role === 'ADMIN' ? 'Quản trị viên' : 'Người dùng'}</small></div></div><button className="sidebar-link logout-link" onClick={onLogout}><LogOut size={18} />Đăng xuất</button></div>
@@ -594,7 +837,6 @@ function AdminAttendanceWorkArea({ user }) {
   const attendanceWindow = useAttendanceWindow(shiftData, today);
   const [faceModal, setFaceModal] = useState(false);
   const [error, setError] = useState('');
-  const [checkInFeedback, setCheckInFeedback] = useState(null);
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
 
@@ -602,27 +844,37 @@ function AdminAttendanceWorkArea({ user }) {
     const token = localStorage.getItem('attendance_token');
     const headers = { Authorization: `Bearer ${token}` };
     const [shiftResponse, todayResponse, historyResponse] = await Promise.all([
-      fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers }),
+      fetch(`${apiUrl}/shifts`, { cache: 'no-store', headers }),
       fetch(`${apiUrl}/attendance/today`, { headers }),
       fetch(`${apiUrl}/attendance/my`, { headers }),
     ]);
     const [shiftBody, todayBody, historyBody] = await Promise.all([shiftResponse.json(), todayResponse.json(), historyResponse.json()]);
     if (!shiftResponse.ok || !todayResponse.ok || !historyResponse.ok) throw new Error('Không thể tải dữ liệu chấm công.');
+    if (!shiftBody.success || !Array.isArray(shiftBody.data)) throw new Error(shiftBody.message || 'Không thể tải cấu hình ca làm việc.');
     const current = todayBody.data || null;
-    const historyToday = (historyBody.data || []).find((record) => new Date(record.attendance_date).toDateString() === new Date().toDateString());
-    setShiftData(shiftBody.data || null);
-    setToday({ ...historyToday, ...current });
+    const historyToday = (historyBody.data || []).filter(isAttendanceForToday);
+    const recordsByShift = new Map();
+    for (const record of [...historyToday, ...getAttendanceRecords(current)]) {
+      recordsByShift.set(record.shift_code, {
+        ...recordsByShift.get(record.shift_code),
+        ...record,
+      });
+    }
+    setShiftData(normalizeShiftSettings(shiftBody.data));
+    const records = [...recordsByShift.values()];
+    setToday(records.length ? { ...records[0], ...current, records } : current);
   }
 
   useEffect(() => {
     loadAttendance().catch((requestError) => setError(requestError.message));
     const shiftRefresh = window.setInterval(() => {
       const token = localStorage.getItem('attendance_token');
-      fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } })
+      fetch(`${apiUrl}/shifts`, { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } })
         .then(async (response) => {
           if (!response.ok) throw new Error('Không thể cập nhật trạng thái ca.');
           const body = await response.json();
-          setShiftData(body.data || null);
+          if (!body.success || !Array.isArray(body.data)) throw new Error(body.message || 'Cấu hình ca làm việc không hợp lệ.');
+          setShiftData(normalizeShiftSettings(body.data));
         })
         .catch((requestError) => setError(requestError.message));
     }, 8000);
@@ -634,73 +886,106 @@ function AdminAttendanceWorkArea({ user }) {
   }, [canAttend]);
 
   async function handleFaceSuccess(embeddings, imageData) {
+    const action = checkedIn ? 'CHECK_OUT' : 'CHECK_IN';
     const body = await submitAttendance(
       user,
-      checkedIn ? 'CHECK_OUT' : 'CHECK_IN',
+      action,
       embeddings,
       imageData,
       attendanceWindow.actionShift?.code,
     );
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
-    setCheckInFeedback({
-      isLate,
-      message: body.message || (isLate
-        ? 'Bạn đã check-in trễ. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.'
-        : 'Check-in thành công, đang chờ quản trị viên duyệt.'),
-    });
-
-    await loadAttendance();
     setFaceModal(false);
+    setToday((current) => mergeAttendanceRecords(current, {
+      ...body.data,
+      attendance_date: getVietnamDateString(),
+      status: 'PENDING',
+      is_late: isLate,
+    }));
   }
 
-  const formatDate = new Intl.DateTimeFormat('vi-VN', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date());
-  const completed = Boolean(today?.check_in && today?.check_out);
-  const statusLabel = completed ? 'Đã duyệt' : today?.status === 'PENDING' ? 'Chờ Admin duyệt' : today?.check_in ? 'Đã check-in' : 'Chưa chấm';
+  const statusLabel = attendanceWindow.statusLabel;
+  const statusRecord = attendanceWindow.selectedRecord || today;
+  const enabledShifts = (shiftData?.allShifts || shiftData?.shifts || [])
+    .filter((shift) => shift.isActive !== false);
+  const displayedShift = attendanceWindow.actionShift
+    || (attendanceWindow.allCompleted ? enabledShifts[enabledShifts.length - 1] : null);
+  const shiftStatus = attendanceWindow.allCompleted
+    ? 'Hoàn tất'
+    : ['CHECK_IN', 'CHECK_OUT', 'WAIT_CHECKOUT'].includes(attendanceWindow.state)
+      ? 'Đang diễn ra'
+      : attendanceWindow.state === 'UPCOMING'
+        ? 'Sắp diễn ra'
+        : 'Đã kết thúc';
+  const showNoShiftState = enabledShifts.length === 0 || attendanceWindow.state === 'UPCOMING';
 
   return <section className="attendance-work-area">
     <div className="attendance-work-heading">
-      <div>
-        <span className="section-label">ATTENDANCE WORK AREA</span>
-        <h2>Chấm công hàng ngày</h2>
-        <p>{formatDate}</p>
-      </div>
+      <h2>Chấm công hàng ngày</h2>
       <span className="live-dot">LIVE</span>
     </div>
 
     {error && <div className="form-error">{error}</div>}
 
-    {checkInFeedback && (
-      <div className={`checkin-feedback-banner ${checkInFeedback.isLate ? 'late' : 'success'}`}>
-        <span className="feedback-icon">{checkInFeedback.isLate ? '⚠️' : '✓'}</span>
-        <p>{checkInFeedback.message}</p>
-        <button className="feedback-close" onClick={() => setCheckInFeedback(null)} aria-label="Đóng thông báo">✕</button>
-      </div>
-    )}
-
     <div className="attendance-work-grid">
       <div className="content-panel shift-status-card">
-        <div className="panel-heading"><div><h3>Trạng thái chấm công</h3><p>Chấm công theo tài khoản, không phân ca.</p></div></div>
+        <div className="panel-heading">
+          <div><h3>Trạng thái chấm công</h3><p>Ca làm việc được cấu hình trong ngày.</p></div>
+          <UserCheck className="attendance-card-icon" size={21} />
+        </div>
         <div className="attendance-status-card">
-          <div><span>Trạng thái</span><strong>{statusLabel}</strong></div>
+          <WorkShiftSchedule shiftSettings={shiftData} attendanceWindow={attendanceWindow} attendancePage />
+          <div className="attendance-current-status"><span>Trạng thái</span><strong>{statusLabel}</strong></div>
           <div className="attendance-time-row">
-            <div><small>Check-in</small><strong>{today?.check_in ? new Date(today.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '--:--'}</strong></div>
-            <div><small>Check-out</small><strong>{today?.check_out ? new Date(today.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '--:--'}</strong></div>
-          </div>
-          <div className="attendance-photo-hints">
-            <span>{today?.check_in_photo_available ? 'Ảnh check-in đã lưu' : 'Chưa có ảnh check-in'}</span>
-            <span>{today?.check_out_photo_available ? 'Ảnh check-out đã lưu' : 'Chưa có ảnh check-out'}</span>
+            <div>
+              <small>Check-in</small>
+              <strong>{statusRecord?.check_in ? formatDisplayTime(statusRecord.check_in) : '--:--'}</strong>
+              <span className="attendance-photo-note">
+                {statusRecord?.check_in_photo_available ? 'Ảnh check-in đã lưu' : 'Chưa có ảnh check-in'}
+              </span>
+            </div>
+            <div>
+              <small>Check-out</small>
+              <strong>{statusRecord?.check_out ? formatDisplayTime(statusRecord.check_out) : '--:--'}</strong>
+              <span className="attendance-photo-note">
+                {statusRecord?.check_out_photo_available ? 'Ảnh check-out đã lưu' : 'Chưa có ảnh check-out'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
       <div className="content-panel face-action-card">
-        <div className="panel-heading"><div><h3>Face ID Action</h3><p>Chụp ảnh nén để xác thực chấm công.</p></div><Camera size={20} /></div>
-        <div className="face-scan-preview"><div className="face-radar"><Camera size={30} /><i /></div><span>Đưa khuôn mặt vào giữa khung hình</span></div>
-        {completed ? <div className="completed-badge">✓ Chấm công hôm nay đã hoàn tất</div> :
-<button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
-<Camera size={17} />{checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'}<ArrowRight size={15} />
-</button>}
-        <small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small>
+        <div className="panel-heading"><div><h3>Chấm công theo ca</h3><p>Trạng thái và hành động cập nhật theo giờ thực tế.</p></div><Clock3 className="attendance-card-icon" size={21} /></div>
+        {shiftData === null ? (
+          <div className="attendance-no-shifts">
+            <Info size={30} />
+            <strong>Đang tải cấu hình ca làm việc...</strong>
+          </div>
+        ) : showNoShiftState ? (
+          <div className="attendance-no-shifts">
+            <Settings className="attendance-no-shifts-settings" size={18} />
+            <Info size={30} />
+            <strong>
+              {enabledShifts.length === 0
+                ? 'Chưa có ca làm việc được bật.'
+                : `Chưa đến giờ làm việc của ca tiếp theo (${formatShiftName(attendanceWindow.actionShift)} mở lúc ${formatDisplayTime(attendanceWindow.actionShift?.start)}).`}
+            </strong>
+          </div>
+        ) : (
+          <div className="attendance-action-content">
+            {displayedShift && (
+              <div className="attendance-action-shift">
+                <div>
+                  <h4>{formatShiftName(displayedShift)}</h4>
+                  <span className="attendance-action-status">{shiftStatus}</span>
+                </div>
+                <strong>{formatDisplayTime(displayedShift.start)} – {formatDisplayTime(displayedShift.end)}</strong>
+              </div>
+            )}
+            <ShiftAttendanceControl attendanceWindow={attendanceWindow} onAttend={() => setFaceModal(true)} showShiftName={false} dailyAttendance />
+          </div>
+        )}
       </div>
     </div>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} onReplaceFace={(embeddings) => replaceFaceEmbedding(user, embeddings)} />}
@@ -921,15 +1206,178 @@ function FaceRegistrationPage({ user, onUserUpdated }) {
   </section>;
 }
 
+function getLastSevenDays(endDate = getVietnamDateString()) {
+  const [year, month, day] = endDate.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  return Array.from({ length: 7 }, (_, index) => {
+    const itemDate = new Date(date);
+    itemDate.setUTCDate(date.getUTCDate() - (6 - index));
+    const key = `${itemDate.getUTCFullYear()}-${String(itemDate.getUTCMonth() + 1).padStart(2, '0')}-${String(itemDate.getUTCDate()).padStart(2, '0')}`;
+    const weekday = new Intl.DateTimeFormat('vi-VN', { weekday: 'short', timeZone: 'UTC' }).format(itemDate);
+    return { date: key, label: weekday.replace('.', ''), present: 0, absent: 0 };
+  });
+}
+
+function DashboardBarChart({ data }) {
+  const maximum = Math.max(1, ...data.map((day) => day.present + day.absent));
+  return (
+    <div className="dashboard-bar-chart" role="img" aria-label="Biểu đồ chấm công 7 ngày gần nhất">
+      <div className="dashboard-chart-grid">
+        {[0, 1, 2, 3].map((line) => <span key={line} />)}
+      </div>
+      <div className="dashboard-chart-columns">
+        {data.map((day) => (
+          <div className="dashboard-chart-day" key={day.date}>
+            <div className="dashboard-chart-bars">
+              <span className="present" title={`Đi làm: ${day.present}`} style={{ height: `${Math.max(day.present ? 5 : 0, (day.present / maximum) * 100)}%` }} />
+              <span className="absent" title={`Nghỉ: ${day.absent}`} style={{ height: `${Math.max(day.absent ? 5 : 0, (day.absent / maximum) * 100)}%` }} />
+            </div>
+            <small>{day.label}</small>
+          </div>
+        ))}
+      </div>
+      <div className="dashboard-chart-legend">
+        <span><i className="present" />Đi làm</span>
+        <span><i className="absent" />Nghỉ</span>
+      </div>
+    </div>
+  );
+}
+
+function DashboardAttendanceDonut({ present, total }) {
+  const safeTotal = Math.max(0, total);
+  const percent = safeTotal ? Math.min(100, Math.round((present / safeTotal) * 100)) : 0;
+  return (
+    <div className="dashboard-donut-wrap">
+      <div className="dashboard-donut" style={{ '--attendance-percent': `${percent}%` }}>
+        <div><strong>{percent}%</strong><span>{present}/{safeTotal} ngày</span></div>
+      </div>
+      <div className="dashboard-donut-legend">
+        <span><i className="present" />Đi làm <strong>{percent}%</strong></span>
+        <span><i className="absent" />Nghỉ <strong>{100 - percent}%</strong></span>
+      </div>
+    </div>
+  );
+}
+
+function DashboardStatCard({ icon: Icon, tone, title, value, detail, badge }) {
+  return (
+    <article className="dashboard-stat-card">
+      <div className={`dashboard-stat-icon ${tone}`}><Icon size={20} /></div>
+      <div className="dashboard-stat-content">
+        <div className="dashboard-stat-title">{title}{badge && <span>{badge}</span>}</div>
+        <strong>{value}</strong>
+        <small>{detail}</small>
+      </div>
+    </article>
+  );
+}
+
+function DashboardShiftsCard({ shifts, attendanceWindow, onAttend, isAdmin = false }) {
+  const nowSeconds = getVietnamSeconds(new Date());
+  const activeShift = shifts.find((shift) => shift.isActive
+    && nowSeconds >= timeToSeconds(shift.start)
+    && nowSeconds <= timeToSeconds(shift.end));
+  const iconForShift = (code) => code === 'MORNING' ? Sun : code === 'AFTERNOON' ? CloudSun : Moon;
+  const actionState = attendanceWindow?.state;
+  const checkInOpen = actionState === 'CHECK_IN';
+  const checkOutOpen = actionState === 'CHECK_OUT';
+  const waitingForCheckout = actionState === 'WAIT_CHECKOUT';
+  let checkOutOpens = null;
+  if (waitingForCheckout && attendanceWindow.actionShift) {
+    checkOutOpens = Math.max(
+      timeToSeconds(attendanceWindow.actionShift.start),
+      timeToSeconds(attendanceWindow.actionShift.end) - 5 * 60,
+    );
+  }
+  const checkoutOpensLabel = checkOutOpens === null
+    ? ''
+    : `${String(Math.floor(checkOutOpens / 3600)).padStart(2, '0')}:${String(Math.floor((checkOutOpens % 3600) / 60)).padStart(2, '0')}`;
+
+  return (
+    <section className="dashboard-content-card dashboard-shifts-card">
+      <div className="dashboard-content-heading"><span className="dashboard-section-icon"><Store size={18} /></span><h2>Các ca làm việc hôm nay</h2></div>
+      <div className="dashboard-shift-list">
+        {shifts.map((shift) => {
+          const ShiftIcon = iconForShift(shift.code);
+          const isOpen = Boolean(shift.isActive
+            && nowSeconds >= timeToSeconds(shift.start)
+            && nowSeconds <= timeToSeconds(shift.end));
+          return (
+            <div className="dashboard-shift-item" key={shift.code}>
+              <span className={`dashboard-shift-icon ${shift.code.toLowerCase()}`}><ShiftIcon size={19} /></span>
+              <div className="dashboard-shift-info">
+                <strong>{formatShiftName(shift)}</strong>
+                <small>{formatDisplayTime(shift.start)} – {formatDisplayTime(shift.end)}</small>
+              </div>
+              <span className={`dashboard-shift-badge ${isOpen ? 'open' : ''}`}>{isOpen ? 'Đang mở' : 'Chưa mở'} <i /></span>
+            </div>
+          );
+        })}
+        {!shifts.length && <div className="dashboard-empty-shifts">Chưa có ca làm việc được cấu hình.</div>}
+      </div>
+      {isAdmin ? (
+        <div className="dashboard-admin-note"><ShieldCheck size={17} /><span>Tài khoản Quản trị viên (Admin) không áp dụng điểm danh bắt buộc.</span></div>
+      ) : (
+        <div className="dashboard-attendance-action">
+          {attendanceWindow?.state === 'ALL_COMPLETED' ? (
+            <div className="dashboard-action-feedback complete"><Check size={17} />Đã hoàn thành chấm công hôm nay.</div>
+          ) : checkInOpen ? (
+            <button type="button" className="dashboard-action-button check-in" onClick={onAttend}><Camera size={17} />Check-in ngay</button>
+          ) : checkOutOpen ? (
+            <button type="button" className="dashboard-action-button check-out" onClick={onAttend}><Camera size={17} />Check-out ngay</button>
+          ) : waitingForCheckout ? (
+            <button type="button" className="dashboard-action-button locked" disabled><LockKeyhole size={16} />Check-out trước 5 phút trước khi hết ca (Mở lúc {checkoutOpensLabel})</button>
+          ) : (
+            <div className="dashboard-action-feedback"><Info size={17} />{attendanceWindow?.statusLabel || 'Chưa đến giờ làm việc của ca tiếp theo.'}</div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function UserPortal({ user }) {
+  const [clockTime, setClockTime] = useState(() => new Date());
   const [faceModal, setFaceModal] = useState(false);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [historyRecords, setHistoryRecords] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [totalWorkDays, setTotalWorkDays] = useState(Number(user.totalWorkDays) || 0);
   const [today, setToday] = useState(null);
   const [shift, setShift] = useState(null);
   const attendanceWindow = useAttendanceWindow(shift, today);
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
-  const [records, setRecords] = useState([]);
   const [checkInFeedback, setCheckInFeedback] = useState(null);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClockTime(new Date()), 1000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadWorkSummary = async () => {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/attendance/my/summary`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể tải tổng ngày công.');
+      if (!cancelled) setTotalWorkDays(Number(body.data?.totalWorkDays) || 0);
+    };
+    loadWorkSummary().catch((error) => console.error('Không thể tải tổng ngày công:', error));
+    const interval = window.setInterval(() => {
+      loadWorkSummary().catch((error) => console.error('Không thể cập nhật tổng ngày công:', error));
+    }, 30000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     const token = localStorage.getItem('attendance_token');
@@ -937,11 +1385,9 @@ function UserPortal({ user }) {
     Promise.all([
       fetch(`${apiUrl}/attendance/today`, { headers }).then((response) => response.json()),
       fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers }).then((response) => response.json()),
-      fetch(`${apiUrl}/attendance/my`, { headers }).then((response) => response.json()),
-    ]).then(([todayBody, shiftBody, historyBody]) => {
+    ]).then(([todayBody, shiftBody]) => {
       setToday(todayBody.data || null);
       setShift(shiftBody.data || null);
-      setRecords(historyBody.data || []);
     }).catch(() => {});
     const shiftRefresh = window.setInterval(() => {
       const currentToken = localStorage.getItem('attendance_token');
@@ -949,20 +1395,14 @@ function UserPortal({ user }) {
       Promise.all([
         fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers: currentHeaders }),
         fetch(`${apiUrl}/attendance/today`, { cache: 'no-store', headers: currentHeaders }),
-        fetch(`${apiUrl}/attendance/my`, { cache: 'no-store', headers: currentHeaders }),
       ])
-        .then(async ([shiftResponse, todayResponse, historyResponse]) => {
-          if (!shiftResponse.ok || !todayResponse.ok || !historyResponse.ok) {
-            throw new Error('Không thể cập nhật trạng thái và lịch sử chấm công.');
+        .then(async ([shiftResponse, todayResponse]) => {
+          if (!shiftResponse.ok || !todayResponse.ok) {
+            throw new Error('Không thể cập nhật trạng thái chấm công.');
           }
-          const [shiftBody, todayBody, historyBody] = await Promise.all([
-            shiftResponse.json(),
-            todayResponse.json(),
-            historyResponse.json(),
-          ]);
+          const [shiftBody, todayBody] = await Promise.all([shiftResponse.json(), todayResponse.json()]);
           setShift(shiftBody.data || null);
           setToday(todayBody.data || null);
-          setRecords(historyBody.data || []);
         })
         .catch((requestError) => console.error('Không thể cập nhật trạng thái ca:', requestError));
     }, 8000);
@@ -973,49 +1413,77 @@ function UserPortal({ user }) {
     if (!canAttend) setFaceModal(false);
   }, [canAttend]);
 
+  async function openAttendanceHistory() {
+    setShowHistoryModal(true);
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/attendance/my`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success || !Array.isArray(body.data)) {
+        throw new Error(body.message || 'Không thể tải lịch sử chấm công.');
+      }
+      setHistoryRecords(body.data);
+    } catch (error) {
+      setHistoryError(error.message || 'Không thể tải lịch sử chấm công.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
   async function handleFaceSuccess(embeddings, imageData) {
+    const action = checkedIn ? 'CHECK_OUT' : 'CHECK_IN';
     const body = await submitAttendance(
       user,
-      checkedIn ? 'CHECK_OUT' : 'CHECK_IN',
+      action,
       embeddings,
       imageData,
       attendanceWindow.actionShift?.code,
     );
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
-    setCheckInFeedback({
-      isLate,
-      message: body.message || (isLate
-        ? 'Bạn đã check-in trễ. Yêu cầu chấm công đã được gửi tới Quản trị viên để xét duyệt.'
-        : 'Check-in thành công, đang chờ quản trị viên duyệt.'),
-    });
-
-    const refresh = await fetch(`${apiUrl}/attendance/today`, { headers });
-    const refreshed = await refresh.json();
-    setToday(refreshed.data || null);
     setFaceModal(false);
+    setToday((current) => mergeAttendanceRecords(current, {
+      ...body.data,
+      attendance_date: getVietnamDateString(),
+      status: 'PENDING',
+      is_late: isLate,
+    }));
   }
 
-  const approvedRecords = records.filter((record) => record.status === 'APPROVED');
-  const workedDays = Number(records[0]?.total_work_days || user.totalWorkDays || 0) || new Set(approvedRecords.map((record) => String(record.attendance_date).slice(0, 10))).size;
-  const accumulatedHours = approvedRecords.reduce((total, record) => total + Number(record.total_hours || 0), 0);
-  const todayStatus = today?.status === 'PENDING'
-    ? 'Chờ duyệt'
-    : today?.check_out
-      ? 'Đã check-out'
-      : today?.check_in
-        ? 'Đã check-in'
-        : 'Chưa check-in';
-
-  return <div className="user-portal">
-    <section className="dashboard-intro">
-      <div>
-        <span className="section-label">PERSONAL ATTENDANCE</span>
-        <h2>Xin chào, {user.fullName || user.username}</h2>
-        <p>Theo dõi chấm công và trạng thái cá nhân của bạn.</p>
-      </div>
-    </section>
-
+  const shifts = shift?.allShifts || shift?.shifts || [];
+  const nowSeconds = getVietnamSeconds(clockTime);
+  const currentShift = shifts.find((item) => item.isActive
+    && nowSeconds >= timeToSeconds(item.start)
+    && nowSeconds <= timeToSeconds(item.end));
+  const greetingPart = nowSeconds < 12 * 60 * 60 ? 'sáng' : nowSeconds < 18 * 60 * 60 ? 'chiều' : 'tối';
+  const greetingIcon = greetingPart === 'sáng' ? '☀️' : greetingPart === 'chiều' ? '🌤️' : '🌙';
+  const currentClockParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+  }).formatToParts(clockTime);
+  const currentClock = Object.fromEntries(currentClockParts.map(({ type, value }) => [type, value]));
+  const checkInAllowed = attendanceWindow.state === 'CHECK_IN';
+  const checkOutAllowed = attendanceWindow.state === 'CHECK_OUT';
+  const checkoutOpensAt = attendanceWindow.actionShift
+    ? Math.max(
+      timeToSeconds(attendanceWindow.actionShift.start),
+      timeToSeconds(attendanceWindow.actionShift.end) - 5 * 60,
+    )
+    : null;
+  const checkoutOpensLabel = checkoutOpensAt === null
+    ? null
+    : `${String(Math.floor(checkoutOpensAt / 3600)).padStart(2, '0')}:${String(Math.floor((checkoutOpensAt % 3600) / 60)).padStart(2, '0')}`;
+  const shiftActionIcon = (code) => code === 'MORNING' ? Sun : code === 'AFTERNOON' ? CloudSun : Moon;
+  const activeShiftState = Boolean(currentShift);
+  return <div className="user-portal user-attendance-dashboard role-dashboard">
     {checkInFeedback && (
       <div className={`checkin-feedback-banner ${checkInFeedback.isLate ? 'late' : 'success'}`}>
         <span className="feedback-icon">{checkInFeedback.isLate ? '⚠️' : '✓'}</span>
@@ -1024,13 +1492,173 @@ function UserPortal({ user }) {
       </div>
     )}
 
-    <span className="overview-label">TỔNG QUAN CÁ NHÂN</span>
-    <section className="metric-grid"><Metric icon={CalendarCheck} title="Tổng ngày công tháng này" value={workedDays || '—'} note="Chỉ tính công đã duyệt" chart="gauge" /><Metric icon={Clock3} title="Số giờ tích lũy" value={accumulatedHours ? `${accumulatedHours.toFixed(2)}h` : '—'} note="Từ các ca đã hoàn thành" chart="line" /><Metric icon={BarChart3} title="Trạng thái hôm nay" value={todayStatus} note={today?.punctuality_status === 'LATE' ? 'Đi làm trễ' : 'Theo lượt chấm hôm nay'} /><Metric icon={UserRound} title="Quyền tài khoản" value="USER" note="Dữ liệu cá nhân" /></section>
-    <section className="dashboard-panels user-portal-panels"><div className="content-panel status-panel"><div className="panel-heading"><div><h3>Chấm công hôm nay</h3><p>Chấm công theo tài khoản, không phân ca.</p></div><span className="live-dot">LIVE</span></div><div className="today-status"><div className="shift-time"><span>TRẠNG THÁI</span><strong>{todayStatus}</strong></div><div className="status-line"><span>Check-in</span><strong>{today?.check_in || '—:—'}</strong></div><div className="status-line"><span>Check-out</span><strong>{today?.check_out || '—:—'}</strong></div>
-<button className="checkout-button face-action" disabled={!canAttend} onClick={() => setFaceModal(true)}>
-<Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
-</button>
-</div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
+    <section className="user-attendance-layout">
+      <div className="user-attendance-main">
+        <section className="user-attendance-hero">
+          <div className="user-attendance-greeting">
+            <span className="user-attendance-greeting-title">{greetingIcon} Chào buổi {greetingPart}!</span>
+            <div className="user-attendance-clock" aria-label={`Giờ hiện tại ${currentClock.hour}:${currentClock.minute}:${currentClock.second} ${currentClock.dayPeriod}`}>
+              <span>{currentClock.hour}:{currentClock.minute}</span>
+              <span className="user-attendance-clock-seconds">:{currentClock.second}</span>
+              <span className="user-attendance-clock-period">{currentClock.dayPeriod}</span>
+            </div>
+            <span className={`user-attendance-live-state ${activeShiftState ? 'in-shift' : ''}`}>
+              <i />{activeShiftState ? 'Đang trong ca làm việc' : 'Ngoài ca làm việc'}
+            </span>
+          </div>
+          <div className="user-current-shift-card">
+            <span className="user-current-shift-label">Ca hiện tại</span>
+            {currentShift ? (
+              <>
+                {React.createElement(shiftActionIcon(currentShift.code), { size: 22 })}
+                <strong>{formatShiftName(currentShift)}</strong>
+                <span>{formatDisplayTime(currentShift.start)} – {formatDisplayTime(currentShift.end)}</span>
+                <small>Đang mở</small>
+              </>
+            ) : (
+              <>
+                <Clock3 size={22} />
+                <strong>{attendanceWindow.actionShift ? formatShiftName(attendanceWindow.actionShift) : 'Chưa có ca hiện tại'}</strong>
+                <span>{attendanceWindow.actionShift ? `Mở lúc ${formatDisplayTime(attendanceWindow.actionShift.start)}` : 'Không có ca đang diễn ra'}</span>
+                {attendanceWindow.actionShift && <small className="upcoming">Sắp mở</small>}
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className="user-attendance-actions">
+          <article className="user-action-card check-in-card">
+            <span className="user-action-icon"><Clock3 size={22} /></span>
+            <h3>Check-in</h3>
+            <p>Bắt đầu ca làm việc</p>
+            <button type="button" disabled={!checkInAllowed} onClick={() => setFaceModal(true)}>
+              Check-in ngay
+            </button>
+          </article>
+          <article className={`user-action-card check-out-card ${checkOutAllowed ? 'available' : ''}`}>
+            <span className="user-action-icon"><Clock3 size={22} /></span>
+            <h3>Check-out</h3>
+            <p>Kết thúc ca làm việc</p>
+            <button type="button" disabled={!checkOutAllowed} onClick={() => setFaceModal(true)}>
+              {checkOutAllowed
+                ? 'Check-out ngay'
+                : attendanceWindow.state === 'WAIT_CHECKOUT' && checkoutOpensLabel
+                  ? `Check-out trước 5 phút trước khi hết ca (Mở lúc ${checkoutOpensLabel})`
+                  : 'Chỉ có thể check-out khi ca đang mở'}
+            </button>
+          </article>
+        </section>
+
+        <aside className="user-attendance-reminder">
+          <Info size={20} />
+          <div>
+            <strong>Vui lòng check-in đúng ca để đảm bảo dữ liệu chính xác!</strong>
+            <p>Hệ thống chỉ cho phép điểm danh khi ca làm việc đang được mở bởi admin.</p>
+          </div>
+        </aside>
+      </div>
+
+      <aside className="user-attendance-sidebar">
+        <section className="user-shift-info-card">
+          <h3>Thông tin ca làm việc</h3>
+          <div className="user-shift-info-list">
+            {shifts.map((item) => {
+              const ShiftIcon = shiftActionIcon(item.code);
+              const isOpen = item.isActive
+                && nowSeconds >= timeToSeconds(item.start)
+                && nowSeconds <= timeToSeconds(item.end);
+              return (
+                <div className={`user-shift-info-item ${isOpen ? 'open' : ''}`} key={item.code}>
+                  <span className={`user-shift-info-icon ${item.code.toLowerCase()}`}><ShiftIcon size={18} /></span>
+                  <div>
+                    <strong>{formatShiftName(item)}</strong>
+                    <small>{formatDisplayTime(item.start)} – {formatDisplayTime(item.end)}</small>
+                  </div>
+                  <span className={`user-shift-status ${isOpen ? 'open' : ''}`}>{isOpen ? 'Đang mở' : 'Chưa mở'}</span>
+                </div>
+              );
+            })}
+            {!shifts.length && <div className="history-empty">Chưa có ca làm việc được cấu hình.</div>}
+          </div>
+        </section>
+
+        <section className="user-work-days-card">
+          <div className="user-work-days-copy">
+            <span className="user-work-days-label">Tổng công tích lũy</span>
+            <div className="user-work-days-value">
+              <strong>{Number.isInteger(totalWorkDays) ? totalWorkDays : Number(totalWorkDays.toFixed(2))}</strong>
+              <span>công</span>
+            </div>
+            <small>công đã được xác nhận</small>
+          </div>
+          <div className="user-work-days-actions">
+            <span className="user-work-days-icon"><Award size={21} /></span>
+            <button type="button" onClick={openAttendanceHistory}>Xem lịch sử <ArrowRight size={13} /></button>
+          </div>
+        </section>
+
+        <section className="user-attendance-notes">
+          <h3><UsersRound size={17} /> Lưu ý</h3>
+          <ul>
+            <li>Chỉ có thể điểm danh khi ca làm việc đang mở.</li>
+            <li>Cần đủ Check-in và Check-out được duyệt để tính công.</li>
+            <li>Tổng công được đồng bộ từ dữ liệu Admin đã chốt/import.</li>
+          </ul>
+        </section>
+      </aside>
+    </section>
+    <AnimatePresence>
+      {showHistoryModal && (
+        <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setShowHistoryModal(false)}>
+          <motion.section
+            className="user-work-history-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="user-work-history-title"
+            initial={{ opacity: 0, y: 18, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.98 }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div><span className="user-work-days-icon"><Award size={20} /></span><div><h2 id="user-work-history-title">Lịch sử chấm công</h2><p>{user.fullName || user.username} · {totalWorkDays} công đã xác nhận</p></div></div>
+              <button type="button" aria-label="Đóng lịch sử" onClick={() => setShowHistoryModal(false)}><X size={19} /></button>
+            </header>
+            <div className="user-work-history-content">
+              {historyLoading ? <div className="user-work-history-state">Đang tải lịch sử chấm công...</div>
+                : historyError ? <div className="form-error">{historyError}</div>
+                  : historyRecords.length ? (
+                    <div className="user-work-history-list">
+                      {historyRecords.map((record) => {
+                        const completed = record.source === 'Excel Import'
+                          || (record.status === 'APPROVED' && Boolean(record.check_in) && Boolean(record.check_out));
+                        const date = record.attendance_date
+                          ? new Date(`${String(record.attendance_date).slice(0, 10)}T00:00:00`).toLocaleDateString('vi-VN')
+                          : '—';
+                        const checkInTime = record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                        const checkOutTime = record.check_out ? new Date(record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—';
+                        return (
+                          <article className="user-work-history-item" key={`${record.source || 'attendance'}-${record.id}-${record.check_in || ''}`}>
+                            <div className={`user-work-history-status ${completed ? 'approved' : record.status === 'REJECTED' ? 'rejected' : 'pending'}`}>
+                              {completed ? <Check size={15} /> : record.status === 'REJECTED' ? <X size={15} /> : <Clock3 size={15} />}
+                            </div>
+                            <div className="user-work-history-main">
+                              <strong>{formatShiftName({ name: record.shift_name || record.shift_code })}</strong>
+                              <span>{date} · Check-in {checkInTime} · Check-out {checkOutTime}</span>
+                            </div>
+                            <span className={`user-work-history-badge ${completed ? 'approved' : record.status === 'REJECTED' ? 'rejected' : 'pending'}`}>
+                              {completed ? 'Đã xác nhận' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}
+                            </span>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : <div className="user-work-history-state">Chưa có lịch sử chấm công.</div>}
+            </div>
+          </motion.section>
+        </motion.div>
+      )}
+    </AnimatePresence>
     {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} onReplaceFace={(embeddings, image) => requestFaceRegistration(embeddings, image)} recoveryRequiresApproval onRecoverySubmitted={(result) => setCheckInFeedback({ isLate: false, message: result.message })} />}
   </div>;
 }
@@ -1133,15 +1761,32 @@ function AdminDashboard({ user }) {
   const [statsLoading, setStatsLoading] = useState(true);
   const [chartRange, setChartRange] = useState('7days');
   const [selectedDate, setSelectedDate] = useState(getVietnamDateString);
-  const hasAttendanceData = dashboardStats?.trend?.some((d) => d.onTime > 0 || d.late > 0);
-  const canAttend = attendanceWindow.canAttend;
-  const unavailableActionLabel = 'ĐÃ CHẤM CÔNG HÔM NAY';
-  const currentDateStr = new Intl.DateTimeFormat('vi-VN', {
+  const dashboardNow = new Date();
+  const dashboardNowSeconds = getVietnamSeconds(dashboardNow);
+  const dashboardShifts = todayShift?.allShifts || todayShift?.shifts || [];
+  const currentShift = dashboardShifts.find((shift) => shift.isActive
+    && dashboardNowSeconds >= timeToSeconds(shift.start)
+    && dashboardNowSeconds <= timeToSeconds(shift.end));
+  const activeShiftCount = dashboardShifts.filter((shift) => shift.isActive).length;
+  const greetingPart = dashboardNowSeconds < 12 * 60 * 60 ? 'sáng' : dashboardNowSeconds < 18 * 60 * 60 ? 'chiều' : 'tối';
+  const dashboardDateLabel = new Intl.DateTimeFormat('vi-VN', {
     weekday: 'long',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
-  }).format(new Date());
+    timeZone: 'Asia/Ho_Chi_Minh',
+  }).format(dashboardNow);
+  const weeklyData = getLastSevenDays().map((day) => {
+    const trend = dashboardStats?.trend?.find((item) => item.date === day.date);
+    const present = Number(trend?.onTime || 0) + Number(trend?.late || 0);
+    return {
+      ...day,
+      present,
+      absent: Math.max(0, Number(dashboardStats?.totalStudents || 0) - present),
+    };
+  });
+  const weeklyPresent = weeklyData.reduce((sum, day) => sum + day.present, 0);
+  const weeklyTotal = Number(dashboardStats?.totalStudents || 0) * 7;
 
   async function loadApprovals() {
     const token = localStorage.getItem('attendance_token');
@@ -1255,6 +1900,10 @@ function AdminDashboard({ user }) {
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật yêu cầu.');
       setApprovals((current) => current.filter((item) => getAttendanceId(item) !== attendanceId && item.request_key !== attendanceId));
+      setActionNotice({
+        title: status === 'APPROVED' ? 'Đã duyệt thành công' : 'Đã từ chối thành công',
+        message: body.message || (status === 'APPROVED' ? 'Yêu cầu chấm công đã được duyệt.' : 'Yêu cầu chấm công đã bị từ chối.'),
+      });
       return true;
     } catch (err) {
       setActionNotice({ title: 'Không thể cập nhật', message: err.message || 'Lỗi mạng khi xử lý duyệt công.' });
@@ -1275,7 +1924,12 @@ function AdminDashboard({ user }) {
       setApprovalConfirm(null);
       return;
     }
-    await handleApproveAll(approvalConfirm.filter, true);
+    await handleBulkReview(
+      approvalConfirm.status,
+      approvalConfirm.filter,
+      approvalConfirm.requestKeys,
+      true,
+    );
   }
 
   function openRejectModal(event) {
@@ -1297,10 +1951,10 @@ function AdminDashboard({ user }) {
     }
   }
 
-  async function handleApproveAll(filterType = 'all', confirmed = false) {
+  async function handleBulkReview(status = 'APPROVED', filterType = 'all', requestKeys = null, confirmed = false) {
     const label = filterType === 'late' ? 'yêu cầu đi làm trễ' : filterType === 'ontime' ? 'yêu cầu đúng giờ' : 'tất cả các yêu cầu';
     if (!confirmed) {
-      setApprovalConfirm({ type: 'bulk', filter: filterType, label });
+      setApprovalConfirm({ type: 'bulk', status, filter: filterType, requestKeys, label });
       return;
     }
     setActionLoading(true);
@@ -1309,16 +1963,22 @@ function AdminDashboard({ user }) {
       const response = await fetch(`${apiUrl}/admin/attendance-requests/approve-all`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ filter: filterType }),
+        body: JSON.stringify({ filter: filterType, status, requestKeys }),
       });
       const body = await response.json();
-      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể duyệt yêu cầu.');
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật yêu cầu.');
       setApprovalConfirm(null);
-      setActionNotice({ title: 'Đã duyệt thành công', message: body.message || 'Các yêu cầu đã được phê duyệt.' });
+      setActionNotice({
+        title: status === 'APPROVED' ? 'Đã duyệt thành công' : 'Đã từ chối thành công',
+        message: body.message || (status === 'APPROVED' ? 'Các yêu cầu đã được phê duyệt.' : 'Các yêu cầu đã bị từ chối.'),
+      });
       await loadApprovals();
     } catch (err) {
       setApprovalConfirm(null);
-      setActionNotice({ title: 'Không thể duyệt', message: err.message || 'Có lỗi khi duyệt yêu cầu.' });
+      setActionNotice({
+        title: status === 'APPROVED' ? 'Không thể duyệt' : 'Không thể từ chối',
+        message: err.message || 'Có lỗi khi cập nhật yêu cầu.',
+      });
     } finally {
       setActionLoading(false);
     }
@@ -1336,77 +1996,81 @@ function AdminDashboard({ user }) {
   }
 
   async function handleFaceSuccess(embeddings, imageData) {
+    const action = checkedIn ? 'CHECK_OUT' : 'CHECK_IN';
     const body = await submitAttendance(
       user,
-      checkedIn ? 'CHECK_OUT' : 'CHECK_IN',
+      action,
       embeddings,
       imageData,
       attendanceWindow.actionShift?.code,
     );
-    const refresh = await fetch(`${apiUrl}/attendance/today`, { headers: { Authorization: `Bearer ${token}` } });
-    const refreshedBody = await refresh.json();
-    setLatestAttendance(refreshedBody.data);
+    const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
+    setFaceModal(false);
+    setLatestAttendance((current) => mergeAttendanceRecords(current, {
+      ...body.data,
+      attendance_date: getVietnamDateString(),
+      status: 'PENDING',
+      is_late: isLate,
+    }));
   }
 
-  return <div className="admin-dashboard">
-    <section className="dashboard-intro"><div><span className="section-label">{currentDateStr}</span><h2>Xin chào, {user.role === 'ADMIN' ? 'Quản trị viên' : (user.fullName || user.username)}</h2><p>Tóm tắt hoạt động chấm công và yêu cầu trong ngày hôm nay.</p></div><div className="world-map" aria-label="World map illustration"><span /><span /><span /><span /><span /><span /><span /><span /></div></section>
-    <span className="overview-label">OVERVIEW</span>
-    <section className="metric-grid dark-metrics">
-      <Metric icon={CalendarCheck} title="Tổng ngày công" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.totalWorkDays} công` : '0 công'} note={dashboardStats ? `${dashboardStats.totalStudents} sinh viên` : 'Đang tải...'} chart="gauge" />
-      <Metric icon={Clock3} title="Tổng giờ" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.totalHours.toLocaleString('vi-VN')} giờ` : '0 giờ'} note="1 công = 8 giờ" chart="line" />
-      <Metric icon={BarChart3} title={selectedDate === getVietnamDateString() ? 'Đã chấm hôm nay' : `Chấm công ${new Date(selectedDate).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`} value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.todayCheckins}/${dashboardStats.totalStudents}` : '0/0'} note={dashboardStats && dashboardStats.totalStudents > 0 ? `${Math.round((dashboardStats.todayCheckins / dashboardStats.totalStudents) * 100)}% sinh viên` : 'Chưa có sinh viên'} chart="donut" />
-      <Metric icon={UsersRound} title="Chờ duyệt" value={statsLoading ? '...' : dashboardStats ? `${dashboardStats.pendingCount}` : '0'} note="Yêu cầu đang chờ xử lý" chart="user" />
+  return <div className="admin-dashboard role-dashboard">
+    <section className="dashboard-welcome">
+      <span className="dashboard-welcome-emoji">{greetingPart === 'sáng' ? '☀️' : greetingPart === 'chiều' ? '🌤️' : '🌙'}</span>
+      <div><h2>Chào buổi {greetingPart}! 👋</h2><p>Chúc bạn có một ngày làm việc hiệu quả!</p></div>
+      <span className="dashboard-welcome-date">{dashboardDateLabel}</span>
     </section>
-    <section className="dashboard-panels admin-panels">
-      <div className="content-panel activity-panel">
-        <div className="panel-heading">
-          <h3>Hoạt động chấm công</h3>
-          <select className="panel-range-select" value={chartRange} onChange={(e) => handleChartRangeChange(e.target.value)}>
-            <option value="7days">7 ngày gần nhất</option>
-            <option value="all">Toàn bộ kỳ chấm công</option>
-          </select>
-        </div>
-        {hasAttendanceData
-          ? <AttendanceChart data={dashboardStats.trend} selectedDate={selectedDate} onDateSelect={handleChartDateSelect} />
-          : <EmptyAttendanceState />}
-      </div>
-      <div className="content-panel status-panel">
-          <div className="panel-heading">
-            <div>
-              <h3>Trạng thái hôm nay</h3>
-              <p>Thông định ca làm việc</p>
-            </div>
-            <span className="live-dot">LIVE</span>
-          </div>
-          <div className="today-status">
-            <div className="shift-time">
-              <span>TRẠNG THÁI HÔM NAY</span>
-              <strong>{latestAttendance?.status === 'PENDING' ? 'Chờ duyệt' : latestAttendance?.check_in ? 'Đã check-in' : 'Chưa check-in'}</strong>
-            </div>
-            <div className="status-line">
-              <span>Check-in</span>
-              <strong className="empty-value">{latestAttendance?.check_in || '—:—'}</strong>
-            </div>
-            <div className="status-line">
-              <span>Check-out</span>
-              <strong className="empty-value">{latestAttendance?.check_out || '—:—'}</strong>
-            </div>
-            <div className="face-preview">
-              <div className="face-radar"><Camera size={24} /><i /></div>
-              <span>{checkedIn ? 'Đã check-in, quét mặt để check-out' : 'Quét khuôn mặt để check-in'}</span>
-            </div>
-            <button
-              className="checkout-button face-action"
-              disabled={!canAttend}
-              onClick={() => {
-                setFaceModal(true);
-              }}
-            >
-              {!canAttend ? unavailableActionLabel : checkedIn ? 'CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
-            </button>
-          </div>
-        </div>
+    <section className="dashboard-stat-grid">
+      <DashboardStatCard
+        icon={Clock3}
+        tone="blue"
+        title="Ca hiện tại"
+        value={currentShift ? formatShiftName(currentShift) : attendanceWindow.actionShift ? formatShiftName(attendanceWindow.actionShift) : 'Chưa có ca'}
+        detail={currentShift ? `${formatDisplayTime(currentShift.start)} – ${formatDisplayTime(currentShift.end)}` : attendanceWindow.actionShift ? `Mở lúc ${formatDisplayTime(attendanceWindow.actionShift.start)}` : 'Không có ca đang diễn ra'}
+        badge={currentShift ? 'Đang mở' : null}
+      />
+      <DashboardStatCard
+        icon={CalendarCheck}
+        tone="green"
+        title="Trạng thái hôm nay"
+        value={statsLoading ? 'Đang tải...' : dashboardStats?.todayCheckins ? `${dashboardStats.todayCheckins} đã chấm` : 'Chưa chấm công'}
+        detail="Tài khoản Admin không bắt buộc điểm danh"
+      />
+      <DashboardStatCard
+        icon={CalendarDays}
+        tone="purple"
+        title="Tổng ca trong ngày"
+        value={activeShiftCount}
+        detail="ca đang hoạt động"
+      />
+      <DashboardStatCard
+        icon={UsersRound}
+        tone="teal"
+        title="Ngày làm việc"
+        value="Hôm nay"
+        detail={dashboardDateLabel}
+      />
+    </section>
+    <section className="dashboard-main-grid">
+      <DashboardShiftsCard shifts={dashboardShifts} isAdmin />
+      <section className="dashboard-content-card dashboard-weekly-chart-card">
+        <div className="dashboard-content-heading"><span className="dashboard-section-icon blue"><BarChart3 size={18} /></span><div><h2>Thống kê chấm công</h2><p>7 ngày gần nhất</p></div></div>
+        {statsLoading ? <div className="dashboard-chart-loading">Đang tải thống kê...</div> : (
+          <DashboardBarChart data={weeklyData} />
+        )}
       </section>
+      <section className="dashboard-content-card dashboard-weekly-donut-card">
+        <div className="dashboard-content-heading"><span className="dashboard-section-icon purple"><CalendarCheck size={18} /></span><h2>Tỷ lệ chấm công tuần</h2></div>
+        {statsLoading ? <div className="dashboard-chart-loading">Đang tải thống kê...</div> : (
+          <DashboardAttendanceDonut present={weeklyPresent} total={weeklyTotal} />
+        )}
+      </section>
+    </section>
+    <section className="dashboard-admin-summary">
+      <DashboardStatCard icon={CalendarDays} tone="blue" title="Tổng ngày công" value={statsLoading ? '...' : `${dashboardStats?.totalWorkDays || 0}`} detail={`${dashboardStats?.totalStudents || 0} sinh viên`} />
+      <DashboardStatCard icon={Clock3} tone="green" title="Tổng giờ công" value={statsLoading ? '...' : `${Number(dashboardStats?.totalHours || 0).toLocaleString('vi-VN')} giờ`} detail="Dữ liệu toàn hệ thống" />
+      <DashboardStatCard icon={UsersRound} tone="purple" title="Chờ phê duyệt" value={approvals.length} detail="Yêu cầu chấm công" />
+    </section>
     <section className="approval-panel content-panel">
       <div className="panel-heading">
         <div>
@@ -1462,7 +2126,7 @@ function AdminDashboard({ user }) {
           onClose={() => setShowAllModal(false)}
           onReview={requestApproval}
           onReject={openRejectModal}
-          onApproveAll={handleApproveAll}
+          onBulkReview={handleBulkReview}
           onPreview={previewApproval}
           actionLoading={actionLoading}
           processingId={processingId}
@@ -1474,6 +2138,7 @@ function AdminDashboard({ user }) {
         <ApprovalConfirmationModal
           event={approvalConfirm.event}
           bulk={approvalConfirm.type === 'bulk'}
+          status={approvalConfirm.status}
           label={approvalConfirm.label}
           loading={actionLoading || processingId !== null}
           onConfirm={handleConfirmApproval}
@@ -2159,7 +2824,7 @@ function ApprovalRow({ event, onPreview, onReview, onReject, processingId }) {
   );
 }
 
-function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll, onPreview, actionLoading, processingId }) {
+function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview, onPreview, actionLoading, processingId }) {
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -2201,14 +2866,24 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
           </div>
           <div className="all-requests-header-actions">
             {filteredRequests.length > 0 && (
-              <button
-                className="btn-approve-all"
-                onClick={() => onApproveAll(activeTab)}
-                disabled={actionLoading}
-              >
-                <CheckCheck size={16} />
-                Duyệt tất cả ({filteredRequests.length})
-              </button>
+              <>
+                <button
+                  className="btn-approve-all"
+                  onClick={() => onBulkReview('APPROVED', activeTab, filteredRequests.map((item) => item.request_key || item.event_id || item.id || item._id))}
+                  disabled={actionLoading}
+                >
+                  <CheckCheck size={16} />
+                  Duyệt tất cả ({filteredRequests.length})
+                </button>
+                <button
+                  className="btn-reject-all"
+                  onClick={() => onBulkReview('REJECTED', activeTab, filteredRequests.map((item) => item.request_key || item.event_id || item.id || item._id))}
+                  disabled={actionLoading}
+                >
+                  <X size={16} />
+                  Từ chối tất cả ({filteredRequests.length})
+                </button>
+              </>
             )}
             <button className="modal-close" onClick={onClose} aria-label="Đóng"><X size={18} /></button>
           </div>
@@ -2337,22 +3012,23 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onApproveAll,
   );
 }
 
-function ApprovalConfirmationModal({ event, bulk, label, onConfirm, onCancel, loading }) {
+function ApprovalConfirmationModal({ event, bulk, status = 'APPROVED', label, onConfirm, onCancel, loading }) {
   const eventName = event?.event_type === 'CHECK_OUT' ? 'Check-out' : 'Check-in';
+  const isRejecting = status === 'REJECTED';
   return (
     <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={(e) => e.stopPropagation()}>
       <motion.section className="approval-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="approval-confirm-title" onClick={(e) => e.stopPropagation()}>
-        <div className="approval-confirm-icon"><Check size={22} /></div>
-        <h3 id="approval-confirm-title">Xác nhận phê duyệt</h3>
+        <div className={`approval-confirm-icon ${isRejecting ? 'reject' : ''}`}>{isRejecting ? <X size={22} /> : <Check size={22} />}</div>
+        <h3 id="approval-confirm-title">{isRejecting ? 'Xác nhận từ chối' : 'Xác nhận phê duyệt'}</h3>
         <p>
           {bulk
-            ? `Bạn có chắc chắn muốn phê duyệt ${label || 'các yêu cầu đã chọn'}?`
-            : `Bạn có chắc chắn muốn duyệt ${eventName} của ${event?.full_name || 'người dùng'}${event?.shift_name ? ` (${event.shift_name})` : ''}?`}
+            ? `Bạn có chắc chắn muốn ${isRejecting ? 'từ chối' : 'phê duyệt'} ${label || 'các yêu cầu đã chọn'}?`
+            : `Bạn có chắc chắn muốn ${isRejecting ? 'từ chối' : 'duyệt'} ${eventName} của ${event?.full_name || 'người dùng'}${event?.shift_name ? ` (${event.shift_name})` : ''}?`}
         </p>
         <div className="approval-confirm-actions">
           <button type="button" className="btn-cancel-approval" onClick={onCancel} disabled={loading}>Hủy</button>
-          <button type="button" className="btn-confirm-approval" onClick={onConfirm} disabled={loading}>
-            {loading ? 'Đang xử lý...' : 'Xác nhận duyệt'}
+          <button type="button" className={`btn-confirm-approval ${isRejecting ? 'reject' : ''}`} onClick={onConfirm} disabled={loading}>
+            {loading ? 'Đang xử lý...' : isRejecting ? 'Xác nhận từ chối' : 'Xác nhận duyệt'}
           </button>
         </div>
       </motion.section>
@@ -2361,10 +3037,11 @@ function ApprovalConfirmationModal({ event, bulk, label, onConfirm, onCancel, lo
 }
 
 function ActionNoticeModal({ title, message, onClose }) {
+  const isError = title.startsWith('Không');
   return (
     <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={(e) => e.stopPropagation()}>
       <motion.section className="approval-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="action-notice-title" onClick={(e) => e.stopPropagation()}>
-        <div className="approval-confirm-icon"><Check size={22} /></div>
+        <div className={`approval-confirm-icon ${isError ? 'reject' : ''}`}>{isError ? <AlertTriangle size={22} /> : <Check size={22} />}</div>
         <h3 id="action-notice-title">{title}</h3>
         <p>{message}</p>
         <div className="approval-confirm-actions">
@@ -3358,6 +4035,7 @@ function ShiftManagement() {
   const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [updatingShiftId, setUpdatingShiftId] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', start_time: '', end_time: '', is_active: true });
@@ -3387,18 +4065,29 @@ function ShiftManagement() {
     setEditingId(shift.id);
     setEditForm({
       name: shift.name,
-      start_time: shift.start_time,
-      end_time: shift.end_time,
+      start_time: String(shift.start_time).slice(0, 5),
+      end_time: String(shift.end_time).slice(0, 5),
       is_active: shift.is_active === 1 || shift.is_active === true
     });
+    setError('');
+    setSuccess('');
   }
 
   function cancelEdit() {
     setEditingId(null);
+    setError('');
   }
 
   async function saveEdit(id) {
     setError('');
+    setSuccess('');
+    const startSeconds = editForm.start_time.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+    const endSeconds = editForm.end_time.split(':').reduce((total, part) => total * 60 + Number(part), 0);
+    if (endSeconds <= startSeconds) {
+      setError('Giờ kết thúc phải sau giờ bắt đầu.');
+      return;
+    }
+    setUpdatingShiftId(id);
     try {
       const token = localStorage.getItem('attendance_token');
       const response = await fetch(`${apiUrl}/shifts/${id}`, {
@@ -3410,13 +4099,17 @@ function ShiftManagement() {
       if (!response.ok || !body.success) throw new Error(body.message || 'Lỗi khi cập nhật ca làm.');
       setEditingId(null);
       await loadShifts();
+      setSuccess(body.message || 'Cập nhật ca làm việc thành công.');
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Không thể cập nhật ca làm việc.');
+    } finally {
+      setUpdatingShiftId(null);
     }
   }
 
   async function toggleShiftAvailability(shift) {
     setError('');
+    setSuccess('');
     setUpdatingShiftId(shift.id);
     try {
       const token = localStorage.getItem('attendance_token');
@@ -3434,6 +4127,7 @@ function ShiftManagement() {
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật trạng thái ca.');
       await loadShifts();
+      setSuccess(body.message || 'Đã cập nhật trạng thái ca làm việc.');
     } catch (requestError) {
       setError(requestError.message);
     } finally {
@@ -3447,11 +4141,12 @@ function ShiftManagement() {
         <div>
           <span className="section-label">GLOBAL SHIFTS SETTINGS</span>
           <h2>Quản lý cấu hình ca làm việc</h2>
-          <p>Thiết lập tên ca, khung giờ bắt đầu và kết thúc áp dụng cho toàn hệ thống.</p>
+          <p>Admin có thể điều chỉnh giờ bắt đầu, giờ kết thúc và trạng thái mở ca áp dụng cho toàn hệ thống.</p>
         </div>
       </div>
       
       {error && <div className="form-error">{error}</div>}
+      {success && <div className="form-success">{success}</div>}
       
       <div className="history-table-wrap" style={{ marginTop: '20px' }}>
         <table className="history-table">
@@ -3485,23 +4180,25 @@ function ShiftManagement() {
                   {editingId === shift.id ? (
                     <input 
                       type="time" 
-                      step="1"
+                      step="60"
                       value={editForm.start_time} 
                       onChange={e => setEditForm({ ...editForm, start_time: e.target.value })} 
+                      aria-label={`Giờ bắt đầu ${shift.name}`}
                       style={{ padding: '4px', border: '1px solid #ccc', borderRadius: '4px' }}
                     />
-                  ) : shift.start_time}
+                  ) : String(shift.start_time).slice(0, 5)}
                 </td>
                 <td>
                   {editingId === shift.id ? (
                     <input 
                       type="time" 
-                      step="1"
+                      step="60"
                       value={editForm.end_time} 
                       onChange={e => setEditForm({ ...editForm, end_time: e.target.value })} 
+                      aria-label={`Giờ kết thúc ${shift.name}`}
                       style={{ padding: '4px', border: '1px solid #ccc', borderRadius: '4px' }}
                     />
-                  ) : shift.end_time}
+                  ) : String(shift.end_time).slice(0, 5)}
                 </td>
                 <td>
                   {editingId === shift.id ? (
@@ -3515,8 +4212,8 @@ function ShiftManagement() {
                 <td>
                   {editingId === shift.id ? (
                     <div style={{ display: 'flex', gap: '8px' }}>
-                      <button className="primary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => saveEdit(shift.id)}>Lưu</button>
-                      <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={cancelEdit}>Hủy</button>
+                      <button className="primary-button" disabled={updatingShiftId !== null} style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => saveEdit(shift.id)}>{updatingShiftId === shift.id ? 'ĐANG LƯU...' : 'Lưu'}</button>
+                      <button className="secondary-button" disabled={updatingShiftId !== null} style={{ padding: '4px 8px', fontSize: '12px' }} onClick={cancelEdit}>Hủy</button>
                     </div>
                   ) : (
                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -3527,7 +4224,7 @@ function ShiftManagement() {
                       >
                         {updatingShiftId === shift.id ? 'ĐANG LƯU...' : Number(shift.is_active) === 1 || shift.is_active === true ? 'Tắt ca' : 'Bật ca'}
                       </button>
-                      <button className="secondary-button" style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => startEdit(shift)}>Sửa</button>
+                      <button className="secondary-button" disabled={updatingShiftId !== null} style={{ padding: '4px 8px', fontSize: '12px' }} onClick={() => startEdit(shift)}>Sửa giờ</button>
                     </div>
                   )}
                 </td>

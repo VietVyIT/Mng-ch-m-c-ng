@@ -5,9 +5,9 @@ export function matchesInitialPassword(password, user) {
     return password === 'admin123' || password === process.env.ADMIN_SECRET_KEY;
   }
 
-  const initialPasswords = ['user123', 'user123@'];
-  if (user.student_code?.trim() && user.student_code !== 'Chưa có MSSV') {
-    initialPasswords.push(user.student_code);
-  }
+  const studentCode = user.student_code?.trim();
+  const initialPasswords = studentCode && studentCode !== 'Chưa có MSSV'
+    ? [studentCode]
+    : ['user123'];
   return initialPasswords.includes(password);
 }

@@ -5,6 +5,7 @@ import { authenticate, authorize } from '../middlewares/auth.middleware.js';
 import { DEFAULT_SHIFTS } from '../config/shifts.js';
 import { createNotification } from '../utils/notifications.js';
 import { parseFaceEmbedding } from '../utils/face.js';
+import { cleanupExpiredAttendancePhotos } from '../utils/attendance-photo-cleanup.js';
 
 const router = Router();
 router.use(authenticate, authorize('ADMIN'));
@@ -75,13 +76,14 @@ router.post('/attendance/import-excel', async (request, response, next) => {
     const unmatched = [];
     const userIds = new Map();
     let noStudentCodeUsers = 0;
-    const defaultPasswordHash = await bcrypt.hash('user123@', 12);
     const noStudentCodePasswordHash = await bcrypt.hash('user123', 12);
     for (const member of members) {
       const name = typeof member.userName === 'string' ? member.userName.trim().replace(/\s+/g, ' ') : '';
       const mssv = typeof member.userMSSV === 'string' ? member.userMSSV.trim() : '';
+      const email = typeof member.email === 'string' ? member.email.trim().toLowerCase() : '';
       const phone = typeof member.phone === 'string' ? member.phone.trim().slice(0, 30) : '';
-      const totalWorkDays = Number(member.totalWorkDays) || 0;
+      const totalWorkDays = Number(member.totalWorkDays);
+      const totalWorkDaysValue = Number.isFinite(totalWorkDays) && totalWorkDays >= 0 ? totalWorkDays : null;
       const totalWorkHours = Number(member.totalHours) || 0;
       if (!name) continue;
       if (!mssv) noStudentCodeUsers += 1;
@@ -89,45 +91,40 @@ router.post('/attendance/import-excel', async (request, response, next) => {
         `SELECT id FROM users
          WHERE role = 'USER'
            AND ((? <> '' AND student_code = ?)
+             OR (? <> '' AND LOWER(email) = ?)
              OR (LOWER(TRIM(full_name)) = LOWER(?)
                AND (student_code IS NULL OR student_code = ?)))
          LIMIT 1`,
-        [mssv, mssv, name, mssv],
+        [mssv, mssv, email, email, name, mssv],
       );
       let userId = existing[0]?.id;
       if (userId) {
-        if (mssv) {
-          await connection.execute(
-            `UPDATE users SET full_name = ?, student_code = ?, phone = NULLIF(?, ''),
-             total_work_days = ?, total_work_hours = ? WHERE id = ?`,
-            [name, mssv, phone, totalWorkDays, totalWorkHours, userId],
-          );
-        } else {
-          await connection.execute(
-            `UPDATE users SET full_name = ?, student_code = NULL, phone = NULLIF(?, ''),
-             password_hash = ?, must_change_password = TRUE,
-             total_work_days = ?, total_work_hours = ? WHERE id = ?`,
-            [name, phone, noStudentCodePasswordHash, totalWorkDays, totalWorkHours, userId],
-          );
-        }
+        await connection.execute(
+          `UPDATE users SET full_name = ?, student_code = COALESCE(NULLIF(?, ''), student_code),
+           email = COALESCE(NULLIF(?, ''), email), phone = NULLIF(?, ''),
+           total_work_days = COALESCE(?, total_work_days), total_work_hours = ? WHERE id = ?`,
+          [name, mssv, email, phone, totalWorkDaysValue, totalWorkHours, userId],
+        );
       } else {
         const [created] = await connection.execute(
           `INSERT INTO users
-           (full_name, student_code, phone, username, password_hash, role, must_change_password, total_work_days, total_work_hours)
-           VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?, ?)`,
-          [name, mssv, phone, name, mssv ? defaultPasswordHash : noStudentCodePasswordHash, totalWorkDays, totalWorkHours],
+           (full_name, student_code, email, phone, username, password_hash, role, must_change_password, total_work_days, total_work_hours)
+           VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?, ?)`,
+          [name, mssv, email, phone, name, mssv ? await bcrypt.hash(mssv, 12) : noStudentCodePasswordHash, totalWorkDaysValue ?? 0, totalWorkHours],
         );
         userId = created.insertId;
       }
       userIds.set(`${mssv}|${name.toLowerCase()}`, userId);
+      if (email) userIds.set(`email:${email}`, userId);
     }
     let imported = 0;
     for (const record of records) {
       const name = typeof record.userName === 'string' ? record.userName.trim().replace(/\s+/g, ' ') : '';
       const mssv = typeof record.userMSSV === 'string' ? record.userMSSV.trim() : '';
-      const userId = userIds.get(`${mssv}|${name.toLowerCase()}`);
+      const email = typeof record.email === 'string' ? record.email.trim().toLowerCase() : '';
+      const userId = (email && userIds.get(`email:${email}`)) || userIds.get(`${mssv}|${name.toLowerCase()}`);
       if (!userId) {
-        unmatched.push({ userName: name, userMSSV: mssv });
+        unmatched.push({ userName: name, userMSSV: mssv, email });
         continue;
       }
       const validDate = /^\d{4}-\d{2}-\d{2}$/.test(record.date);
@@ -750,7 +747,13 @@ async function fetchAttendanceRequests(filter = 'all') {
               COALESCE(a.shift, 'MORNING') AS shift_name,
               a.work_date, a.work_date AS attendance_date,
               a.check_in_time AS captured_at, a.check_in_time, a.check_out_time,
-              a.check_in_image, NULL AS check_out_image,
+              IF(a.check_in_image IS NOT NULL
+                 AND COALESCE(
+                   STR_TO_DATE(REPLACE(LEFT(a.check_in_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
+                   a.created_at
+                 ) >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
+                 a.check_in_image, NULL) AS check_in_image,
+              NULL AS check_out_image,
               a.check_in_status AS status, a.is_late,
               IF(a.is_late, 'LATE', 'ON_TIME') AS punctuality_status,
               a.late_minutes, 'LEGACY' AS source
@@ -768,7 +771,13 @@ async function fetchAttendanceRequests(filter = 'all') {
               COALESCE(a.shift, 'MORNING') AS shift_name,
               a.work_date, a.work_date AS attendance_date,
               a.check_out_time AS captured_at, a.check_in_time, a.check_out_time,
-              NULL AS check_in_image, a.check_out_image,
+              NULL AS check_in_image,
+              IF(a.check_out_image IS NOT NULL
+                 AND COALESCE(
+                   STR_TO_DATE(REPLACE(LEFT(a.check_out_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
+                   a.created_at
+                 ) >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
+                 a.check_out_image, NULL) AS check_out_image,
               a.check_out_status AS status, a.is_late,
               IF(a.is_late, 'LATE', 'ON_TIME') AS punctuality_status,
               a.late_minutes, 'LEGACY' AS source
@@ -783,9 +792,11 @@ async function fetchAttendanceRequests(filter = 'all') {
               u.username, u.full_name, a.shift_code AS shift,
               a.shift_name, a.attendance_date AS work_date,
               a.attendance_date, e.captured_at, a.check_in, a.check_out,
-              IF(e.event_type = 'CHECK_IN' AND e.image IS NOT NULL,
+              IF(e.event_type = 'CHECK_IN' AND e.image IS NOT NULL
+                 AND e.captured_at >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
                  CONCAT('data:', COALESCE(e.image_mime, 'image/jpeg'), ';base64,', TO_BASE64(e.image)), NULL) AS check_in_image,
-              IF(e.event_type = 'CHECK_OUT' AND e.image IS NOT NULL,
+              IF(e.event_type = 'CHECK_OUT' AND e.image IS NOT NULL
+                 AND e.captured_at >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
                  CONCAT('data:', COALESCE(e.image_mime, 'image/jpeg'), ';base64,', TO_BASE64(e.image)), NULL) AS check_out_image,
               e.status, e.is_late, e.punctuality_status, 0 AS late_minutes, 'EVENT' AS source
        FROM attendance_events e
@@ -824,10 +835,12 @@ async function serveApprovalImage(request, response, next) {
     if (requestKey.startsWith('event:')) {
       const [events] = await pool.execute(
         `SELECT e.image, e.image_mime FROM attendance_events e
-         WHERE e.id = ? LIMIT 1`,
+         WHERE e.id = ?
+           AND e.captured_at >= DATE_SUB(NOW(), INTERVAL 20 HOUR)
+         LIMIT 1`,
         [requestKey.slice('event:'.length)],
       );
-      if (!events[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh không tồn tại.' });
+      if (!events[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
       return response.json({
         success: true,
         data: `data:${events[0].image_mime || 'image/jpeg'};base64,${events[0].image.toString('base64')}`,
@@ -837,8 +850,15 @@ async function serveApprovalImage(request, response, next) {
       ? requestKey.slice(requestKey.lastIndexOf(':') + 1)
       : requestKey;
     const eventType = requestKey.includes('CHECK_OUT') ? 'check_out_image' : 'check_in_image';
+    const timeColumn = eventType === 'check_out_image' ? 'check_out_time' : 'check_in_time';
     const [rows] = await pool.execute(
-      `SELECT ${eventType} AS image FROM attendance_logs WHERE id = ? LIMIT 1`,
+      `SELECT ${eventType} AS image FROM attendance_logs
+       WHERE id = ?
+         AND COALESCE(
+           STR_TO_DATE(REPLACE(LEFT(${timeColumn}, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
+           created_at
+         ) >= DATE_SUB(NOW(), INTERVAL 20 HOUR)
+       LIMIT 1`,
       [eventId],
     );
     const image = rows[0]?.image;
@@ -856,10 +876,7 @@ router.get('/attendance-requests/:id/image', serveApprovalImage);
 router.get('/attendance', async (_request, response, next) => {
   try {
     await ensureImportedAttendanceTable(pool);
-    await pool.execute(
-      `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
-       WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
-    );
+    await cleanupExpiredAttendancePhotos();
     const [rows] = await pool.execute(
       `SELECT a.id, a.user_id, a.attendance_date, a.shift_name, a.shift_start, a.shift_end,
               a.check_in, a.check_out, a.total_hours, a.status, a.punctuality_status,
@@ -962,15 +979,14 @@ router.delete('/attendance-logs/:attendanceId', async (request, response, next) 
 
 router.get('/attendance/:attendanceId/image/:type', async (request, response, next) => {
   try {
-    await pool.execute(
-      `UPDATE attendance_events SET image = NULL, photo_expired = TRUE
-       WHERE image IS NOT NULL AND captured_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)`,
-    );
+    await cleanupExpiredAttendancePhotos();
     const eventType = request.params.type === 'check-in' ? 'CHECK_IN' : request.params.type === 'check-out' ? 'CHECK_OUT' : null;
     if (!eventType) return response.status(400).json({ success: false, message: 'Loại ảnh không hợp lệ.' });
     const [rows] = await pool.execute(
       `SELECT image, image_mime FROM attendance_events
-       WHERE attendance_id = ? AND event_type = ? ORDER BY captured_at DESC LIMIT 1`,
+       WHERE attendance_id = ? AND event_type = ?
+         AND captured_at >= DATE_SUB(NOW(), INTERVAL 20 HOUR)
+       ORDER BY captured_at DESC LIMIT 1`,
       [request.params.attendanceId, eventType],
     );
     if (!rows[0]?.image) return response.status(404).json({ success: false, message: 'Ảnh đã hết hạn hoặc không tồn tại.' });
@@ -1166,17 +1182,29 @@ async function approveAllHandler(request, response, next) {
   const connection = await pool.getConnection();
   try {
     const filter = String(request.body?.filter || 'all');
+    const status = String(request.body?.status || 'APPROVED').toUpperCase();
+    if (!['APPROVED', 'REJECTED'].includes(status)) {
+      return response.status(400).json({ success: false, message: 'Trạng thái duyệt không hợp lệ.' });
+    }
+    const requestKeys = Array.isArray(request.body?.requestKeys)
+      ? new Set(request.body.requestKeys.filter((key) => typeof key === 'string'))
+      : null;
     const requests = await fetchAttendanceRequests(filter);
+    const requestsToReview = requestKeys
+      ? requests.filter((item) => requestKeys.has(item.request_key))
+      : requests;
     await connection.beginTransaction();
-    let approvedCount = 0;
-    for (const item of requests) {
-      if (await applyApproval(connection, item.request_key, 'APPROVED', null, request.user.userId)) approvedCount += 1;
+    let processedCount = 0;
+    for (const item of requestsToReview) {
+      if (await applyApproval(connection, item.request_key, status, null, request.user.userId)) processedCount += 1;
     }
     await connection.commit();
     return response.json({
       success: true,
-      approvedCount,
-      message: `Đã phê duyệt thành công ${approvedCount} yêu cầu chấm công.`,
+      processedCount,
+      message: status === 'APPROVED'
+        ? `Đã phê duyệt thành công ${processedCount} yêu cầu chấm công.`
+        : `Đã từ chối thành công ${processedCount} yêu cầu chấm công.`,
     });
   } catch (error) {
     await connection.rollback();

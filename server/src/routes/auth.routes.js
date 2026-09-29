@@ -101,8 +101,8 @@ router.post('/login', async (request, response, next) => {
     } else {
       passwordMatches = (user.password_hash ? await bcrypt.compare(password, user.password_hash) : false)
         || matchesInitialPassword(password, user);
-      const initialPasswordHint = user.student_code?.trim()
-        ? `MSSV "${user.student_code}", "user123" hoặc "user123@"`
+      const initialPasswordHint = user.student_code?.trim() && user.student_code !== 'Chưa có MSSV'
+        ? `MSSV "${user.student_code}"`
         : '"user123"';
       if (!passwordMatches) hintMessage = `Mật khẩu không đúng. Mật khẩu khởi tạo có thể là ${initialPasswordHint}.`;
     }

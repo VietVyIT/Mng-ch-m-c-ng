@@ -21,6 +21,10 @@ const app = express();
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+const configuredClientUrl = env.clientUrl.trim();
+const isDevelopmentLoopbackOrigin = (origin) => env.nodeEnv !== 'production'
+  && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(origin);
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -34,9 +38,21 @@ app.use(helmet({
   },
 }));
 app.use(cors({ 
-  origin: env.clientUrl && env.clientUrl != 'http://localhost' ? env.clientUrl.trim() : true,
+  origin: (origin, callback) => {
+    if (
+      !origin
+      || !configuredClientUrl
+      || configuredClientUrl === 'http://localhost'
+      || origin === configuredClientUrl
+      || isDevelopmentLoopbackOrigin(origin)
+    ) {
+      callback(null, true);
+      return;
+    }
+    callback(null, false);
+  },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(express.json({ limit: '50mb' }));

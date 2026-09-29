@@ -88,19 +88,41 @@ async function getShiftAvailability(shiftCode) {
   return { ...shift, date, time };
 }
 
+async function getCheckInShiftAvailability(shiftCode) {
+  const { date, time } = getVietnamDateTime();
+  const settingColumn = shiftSettingColumns[shiftCode];
+  if (!settingColumn) return null;
+  const [rows] = await db.query(
+    `SELECT id, name, start_time, end_time, is_active
+     FROM shifts ORDER BY FIELD(id, 'MORNING', 'AFTERNOON', 'EVENING')`,
+  );
+  const shift = rows.find((row) => row.id === shiftCode);
+  if (!shift || Number(shift.is_active) !== 1) return null;
+  const currentSeconds = toSeconds(time);
+  const startSeconds = toSeconds(shift.start_time);
+  const endSeconds = toSeconds(shift.end_time);
+  if (!getShiftAttendanceState(currentSeconds, startSeconds, endSeconds, true).isCheckInOpen) return null;
+  return { ...shift, date, time };
+}
+
 // 1. API CHECK-IN
 router.post('/check-in', authenticate, async (req, res) => {
   let connection;
   try {
     await ensureReviewStatusColumns();
-    const { image, imageData, embedding, embeddings } = req.body;
+    const { image, imageData, embedding, embeddings, shift } = req.body;
     const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
     const finalImage = image || imageData || null;
     if (!currentEmbedding) {
       return res.status(400).json({ success: false, message: 'Không nhận diện được khuôn mặt. Hãy nhìn thẳng vào camera và thử lại.' });
     }
-    const { date: checkDate, time: checkTime } = getVietnamDateTime();
-    const effectiveShift = 'FLEXIBLE';
+    const shiftInfo = await getCheckInShiftAvailability(shift);
+    if (!shiftInfo) {
+      return res.status(400).json({ success: false, message: 'Check-in chỉ mở trong 2 giờ đầu ca làm việc đang bật.' });
+    }
+    const checkDate = shiftInfo.date;
+    const checkTime = shiftInfo.time;
+    const effectiveShift = shiftInfo.id;
 
     connection = await db.getConnection();
     await connection.beginTransaction();
@@ -157,11 +179,12 @@ router.post('/check-in', authenticate, async (req, res) => {
     );
     if (existing.length || modernExisting.length || importedExisting.length) {
       await connection.rollback();
-      return res.status(409).json({ success: false, message: 'Bạn đã check-in hôm nay rồi.' });
+      return res.status(409).json({ success: false, message: 'Bạn đã check-in ca này rồi.' });
     }
 
-    const isLate = 0;
-    const lateMinutes = 0;
+    const minutesAfterStart = Math.floor((toSeconds(checkTime) - toSeconds(shiftInfo.start_time)) / 60);
+    const lateMinutes = Math.max(0, minutesAfterStart);
+    const isLate = lateMinutes > 10 ? 1 : 0;
     const fullDateTime = `${checkDate} ${checkTime}`;
 
     await connection.query(
@@ -174,7 +197,7 @@ router.post('/check-in', authenticate, async (req, res) => {
     await connection.commit();
     return res.status(200).json({
       success: true,
-      data: { shift_code: effectiveShift, check_in: fullDateTime, is_late: Boolean(isLate), pending_review: true },
+      data: { shift_code: effectiveShift, check_in: fullDateTime, is_late: Boolean(isLate), late_minutes: lateMinutes, status: 'PENDING', pending_review: true },
       message: 'Check-in thành công, đang chờ quản trị viên duyệt.',
     });
   } catch (error) {
@@ -299,13 +322,18 @@ router.get('/today', authenticate, async (req, res) => {
     const placeholders = identifiers.map(() => '?').join(', ');
     const [rows] = await db.query(
       `SELECT id, work_date as attendance_date, shift as shift_code, shift as shift_name,
-              check_in_time as check_in, check_out_time as check_out, status, is_late, late_minutes
+              check_in_time as check_in, check_out_time as check_out, status, is_late, late_minutes,
+              IF(check_in_image IS NOT NULL, 1, 0) AS check_in_photo_available,
+              IF(check_out_image IS NOT NULL, 1, 0) AS check_out_photo_available
        FROM attendance_logs 
        WHERE mssv IN (${placeholders}) AND work_date = ?
-       ORDER BY check_in_time DESC LIMIT 1`,
+       ORDER BY check_in_time DESC`,
       [...identifiers, date]
     );
-    return res.json({ success: true, data: rows[0] || null });
+    return res.json({
+      success: true,
+      data: rows.length ? { ...rows[0], records: rows } : null,
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -358,6 +386,31 @@ router.get('/shifts/today', authenticate, async (req, res) => {
         morningEnabled: isOpen('MORNING'),
         afternoonEnabled: isOpen('AFTERNOON'),
         eveningEnabled: isOpen('EVENING'),
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+router.get('/my/summary', authenticate, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store, max-age=0');
+    const [rows] = await db.query(
+      `SELECT total_work_days, total_work_hours
+       FROM users
+       WHERE id = ? AND role = 'USER'
+       LIMIT 1`,
+      [req.user.userId],
+    );
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy tài khoản người dùng.' });
+    }
+    return res.json({
+      success: true,
+      data: {
+        totalWorkDays: Number(rows[0].total_work_days) || 0,
+        totalWorkHours: Number(rows[0].total_work_hours) || 0,
       },
     });
   } catch (error) {
@@ -443,8 +496,17 @@ router.get('/:attendanceId/image/:type', authenticate, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Loại ảnh không hợp lệ.' });
     }
     if (!source || source === 'Camera Request') {
+      const capturedAtExpression = `COALESCE(
+        STR_TO_DATE(REPLACE(LEFT(a.${req.params.type === 'check-in' ? 'check_in_time' : 'check_out_time'}, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
+        a.created_at
+      )`;
       const [legacyRows] = await db.query(
-        `SELECT a.${imageColumn} AS image
+        `SELECT IF(
+           a.${imageColumn} IS NOT NULL
+           AND ${capturedAtExpression} >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
+           a.${imageColumn},
+           NULL
+         ) AS image
          FROM attendance_logs a
          JOIN users u ON u.id = ?
          WHERE a.id = ?
@@ -470,9 +532,17 @@ router.get('/:attendanceId/image/:type', authenticate, async (req, res) => {
     }
     const eventType = req.params.type === 'check-in' ? 'CHECK_IN' : 'CHECK_OUT';
     const eventImageColumn = req.params.type === 'check-in' ? 'check_in_image' : 'check_out_image';
+    const capturedAtColumn = req.params.type === 'check-in' ? 'check_in' : 'check_out';
     const [modernRows] = await db.query(
-      `SELECT COALESCE(e.image, a.${eventImageColumn}) AS image,
-              COALESCE(e.image_mime, 'image/jpeg') AS image_mime
+      `SELECT CASE
+                WHEN e.image IS NOT NULL
+                     AND e.captured_at >= DATE_SUB(NOW(), INTERVAL 20 HOUR) THEN e.image
+                WHEN a.${eventImageColumn} IS NOT NULL
+                     AND COALESCE(a.${capturedAtColumn}, a.created_at) >= DATE_SUB(NOW(), INTERVAL 20 HOUR)
+                  THEN a.${eventImageColumn}
+                ELSE NULL
+              END AS image,
+              COALESCE(e.image_mime, a.image_mime, 'image/jpeg') AS image_mime
        FROM attendance a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN attendance_events e

@@ -1,5 +1,5 @@
 export function canCheckInAt(currentSeconds, startSeconds, endSeconds) {
-  return currentSeconds >= startSeconds && currentSeconds < endSeconds;
+  return currentSeconds >= startSeconds && currentSeconds <= startSeconds + 2 * 60 * 60;
 }
 
 export function getCheckOutWindow(startSeconds, endSeconds, nextShiftStartSeconds = 24 * 60 * 60) {
