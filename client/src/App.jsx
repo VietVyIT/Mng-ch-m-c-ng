@@ -130,6 +130,29 @@ function normalizeShiftSettings(value) {
   };
 }
 
+function mergeConfiguredShiftTimes(attendanceShiftData, configuredShiftRows) {
+  const configuredShifts = normalizeShiftSettings(configuredShiftRows).allShifts;
+  const configuredByCode = new Map(configuredShifts.map((shift) => [shift.code, shift]));
+  const attendanceShifts = attendanceShiftData?.allShifts || attendanceShiftData?.shifts || [];
+  const allShifts = attendanceShifts.map((shift) => {
+    const configuredShift = configuredByCode.get(shift.code || shift.id);
+    if (!configuredShift) return shift;
+    return {
+      ...shift,
+      name: configuredShift.name || shift.name,
+      start: configuredShift.start,
+      end: configuredShift.end,
+      isActive: configuredShift.isActive,
+    };
+  });
+
+  return {
+    ...attendanceShiftData,
+    allShifts,
+    shifts: allShifts.filter((shift) => shift.isActive),
+  };
+}
+
 function mergeAttendanceRecords(currentRecord, nextRecord) {
   const existing = getAttendanceRecords(currentRecord);
   const previous = existing.find((record) => record.shift_code === nextRecord.shift_code);
@@ -1385,23 +1408,35 @@ function UserPortal({ user }) {
     Promise.all([
       fetch(`${apiUrl}/attendance/today`, { headers }).then((response) => response.json()),
       fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers }).then((response) => response.json()),
-    ]).then(([todayBody, shiftBody]) => {
+      fetch(`${apiUrl}/shifts`, { cache: 'no-store' }).then((response) => response.json()),
+    ]).then(([todayBody, shiftBody, configuredShiftBody]) => {
+      if (!configuredShiftBody.success || !Array.isArray(configuredShiftBody.data)) {
+        throw new Error(configuredShiftBody.message || 'Dữ liệu ca làm việc đã cấu hình không hợp lệ.');
+      }
       setToday(todayBody.data || null);
-      setShift(shiftBody.data || null);
-    }).catch(() => {});
+      setShift(mergeConfiguredShiftTimes(shiftBody.data, configuredShiftBody.data));
+    }).catch((error) => console.error('Không thể tải lịch ca làm việc:', error));
     const shiftRefresh = window.setInterval(() => {
       const currentToken = localStorage.getItem('attendance_token');
       const currentHeaders = { Authorization: `Bearer ${currentToken}` };
       Promise.all([
         fetch(`${apiUrl}/attendance/shifts/today`, { cache: 'no-store', headers: currentHeaders }),
         fetch(`${apiUrl}/attendance/today`, { cache: 'no-store', headers: currentHeaders }),
+        fetch(`${apiUrl}/shifts`, { cache: 'no-store' }),
       ])
-        .then(async ([shiftResponse, todayResponse]) => {
-          if (!shiftResponse.ok || !todayResponse.ok) {
+        .then(async ([shiftResponse, todayResponse, configuredShiftResponse]) => {
+          if (!shiftResponse.ok || !todayResponse.ok || !configuredShiftResponse.ok) {
             throw new Error('Không thể cập nhật trạng thái chấm công.');
           }
-          const [shiftBody, todayBody] = await Promise.all([shiftResponse.json(), todayResponse.json()]);
-          setShift(shiftBody.data || null);
+          const [shiftBody, todayBody, configuredShiftBody] = await Promise.all([
+            shiftResponse.json(),
+            todayResponse.json(),
+            configuredShiftResponse.json(),
+          ]);
+          if (!configuredShiftBody.success || !Array.isArray(configuredShiftBody.data)) {
+            throw new Error(configuredShiftBody.message || 'Dữ liệu ca làm việc đã cấu hình không hợp lệ.');
+          }
+          setShift(mergeConfiguredShiftTimes(shiftBody.data, configuredShiftBody.data));
           setToday(todayBody.data || null);
         })
         .catch((requestError) => console.error('Không thể cập nhật trạng thái ca:', requestError));
