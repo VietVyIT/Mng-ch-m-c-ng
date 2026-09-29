@@ -42,8 +42,8 @@ services:
       - JWT_SECRET=${JWT_SECRET:-random-secret-for-production-123}
       - CLIENT_URL=http://localhost
       - TZ=Asia/Ho_Chi_Minh
-    ports:
-      - "5000:5000"
+    expose:
+      - "5000"
 
   nginx:
     image: nginx:alpine

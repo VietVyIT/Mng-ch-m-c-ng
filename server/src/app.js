@@ -20,6 +20,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {

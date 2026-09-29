@@ -89,9 +89,21 @@ export const initDatabase = async () => {
     try {
       await connection.query(`ALTER TABLE attendance_logs MODIFY COLUMN check_in_image LONGTEXT;`);
       await connection.query(`ALTER TABLE attendance_logs MODIFY COLUMN check_out_image LONGTEXT;`);
-      await connection.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS is_late TINYINT(1) DEFAULT 0;`);
-      await connection.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS late_minutes INT DEFAULT 0;`);
-      await connection.query(`ALTER TABLE attendance_logs ADD COLUMN IF NOT EXISTS work_date DATE NULL;`);
+      for (const [column, definition] of [
+        ['is_late', 'TINYINT(1) DEFAULT 0'],
+        ['late_minutes', 'INT DEFAULT 0'],
+        ['work_date', 'DATE NULL'],
+      ]) {
+        const [columns] = await connection.query(
+          'SHOW COLUMNS FROM attendance_logs LIKE ?',
+          [column],
+        );
+        if (columns.length === 0) {
+          await connection.query(
+            `ALTER TABLE attendance_logs ADD COLUMN ${column} ${definition};`,
+          );
+        }
+      }
       
       // Also maintain original tables for backward compatibility until routes are fully refactored
       await connection.query('ALTER TABLE attendance MODIFY COLUMN check_in_image LONGTEXT');
