@@ -14,6 +14,13 @@ const router = Router();
 router.post('/register', authenticate, async (request, response, next) => {
   let connection;
   try {
+    if (request.user.role !== 'ADMIN') {
+      return response.status(403).json({
+        success: false,
+        message: 'Yêu cầu đăng ký lại khuôn mặt cần được Admin duyệt.',
+        errorCode: 'FACE_REVIEW_REQUIRED',
+      });
+    }
     const { embedding, embeddings } = request.body;
     const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
     if (!currentEmbedding) {
@@ -62,6 +69,36 @@ router.post('/register', authenticate, async (request, response, next) => {
   }
 });
 
+router.post('/register/replace', authenticate, async (request, response, next) => {
+  try {
+    if (request.user.role !== 'ADMIN') {
+      return response.status(403).json({
+        success: false,
+        message: 'Thành viên cần gửi yêu cầu để Admin duyệt khi đăng ký lại khuôn mặt.',
+        errorCode: 'FACE_REVIEW_REQUIRED',
+      });
+    }
+    const { embedding, embeddings } = request.body;
+    const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
+    if (!currentEmbedding) {
+      return response.status(400).json({ success: false, message: 'Embedding khuôn mặt không hợp lệ.', errorCode: 'INVALID_EMBEDDING' });
+    }
+    const [result] = await pool.execute(
+      'UPDATE users SET face_embedding = ?, face_registered = TRUE WHERE id = ?',
+      [JSON.stringify(currentEmbedding), request.user.userId],
+    );
+    if (!result.affectedRows) {
+      const [users] = await pool.execute('SELECT id FROM users WHERE id = ? LIMIT 1', [request.user.userId]);
+      if (!users.length) {
+        return response.status(404).json({ success: false, message: 'Không tìm thấy tài khoản.' });
+      }
+    }
+    return response.json({ success: true, message: 'Đã cập nhật khuôn mặt. Hãy thử chấm công lại.' });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/verify', authenticate, async (request, response, next) => {
   try {
     const { embedding, embeddings } = request.body;
@@ -86,6 +123,60 @@ router.post('/verify', authenticate, async (request, response, next) => {
         threshold: env.faceMatchDistanceThreshold,
       },
     });
+  } catch (error) {
+    return next(error);
+  }
+});
+router.post('/register/request', authenticate, async (request, response, next) => {
+  try {
+    if (request.user.role !== 'USER') {
+      return response.status(403).json({
+        success: false,
+        message: 'Chỉ tài khoản thành viên mới gửi yêu cầu duyệt khuôn mặt.',
+        errorCode: 'FORBIDDEN',
+      });
+    }
+    const { embedding, embeddings, image } = request.body;
+    const currentEmbedding = averageEmbeddings(embeddings) || (validateEmbedding(embedding) ? embedding : null);
+    if (!currentEmbedding) {
+      return response.status(400).json({ success: false, message: 'Embedding khuôn mặt không hợp lệ.', errorCode: 'INVALID_EMBEDDING' });
+    }
+    if (image != null && (typeof image !== 'string' || image.length > 2_000_000)) {
+      return response.status(400).json({ success: false, message: 'Ảnh khuôn mặt không hợp lệ hoặc vượt quá dung lượng cho phép.' });
+    }
+
+    const [existing] = await pool.execute(
+      'SELECT id FROM face_re_registration_requests WHERE user_id = ? AND status = ? LIMIT 1',
+      [request.user.userId, 'PENDING']
+    );
+    if (existing.length > 0) {
+      return response.status(409).json({ success: false, message: 'Bạn đã có một yêu cầu đăng ký lại khuôn mặt đang chờ admin duyệt.' });
+    }
+
+    await pool.execute(
+      'INSERT INTO face_re_registration_requests (user_id, new_face_embedding, new_face_image, status) VALUES (?, ?, ?, ?)',
+      [request.user.userId, JSON.stringify(currentEmbedding), image || null, 'PENDING']
+    );
+
+    return response.json({ success: true, message: 'Đã gửi yêu cầu đăng ký lại khuôn mặt, vui lòng chờ admin duyệt.' });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get('/register/my-request', authenticate, async (request, response, next) => {
+  try {
+    if (request.user.role !== 'USER') {
+      return response.status(403).json({ success: false, message: 'Chức năng này chỉ dành cho tài khoản thành viên.' });
+    }
+    const [rows] = await pool.execute(
+      'SELECT id, status, rejection_reason, created_at, reviewed_at FROM face_re_registration_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 1',
+      [request.user.userId]
+    );
+    if (!rows.length) {
+      return response.json({ success: true, data: null });
+    }
+    return response.json({ success: true, data: rows[0] });
   } catch (error) {
     return next(error);
   }

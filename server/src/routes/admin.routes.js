@@ -74,7 +74,9 @@ router.post('/attendance/import-excel', async (request, response, next) => {
     await ensureImportedAttendanceTable(connection);
     const unmatched = [];
     const userIds = new Map();
+    let noStudentCodeUsers = 0;
     const defaultPasswordHash = await bcrypt.hash('user123@', 12);
+    const noStudentCodePasswordHash = await bcrypt.hash('user123', 12);
     for (const member of members) {
       const name = typeof member.userName === 'string' ? member.userName.trim().replace(/\s+/g, ' ') : '';
       const mssv = typeof member.userMSSV === 'string' ? member.userMSSV.trim() : '';
@@ -82,25 +84,38 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       const totalWorkDays = Number(member.totalWorkDays) || 0;
       const totalWorkHours = Number(member.totalHours) || 0;
       if (!name) continue;
+      if (!mssv) noStudentCodeUsers += 1;
       const [existing] = await connection.execute(
         `SELECT id FROM users
-         WHERE (role = 'USER' AND ((? <> '' AND student_code = ?) OR LOWER(TRIM(full_name)) = LOWER(?)))
+         WHERE role = 'USER'
+           AND ((? <> '' AND student_code = ?)
+             OR (LOWER(TRIM(full_name)) = LOWER(?)
+               AND (student_code IS NULL OR student_code = ?)))
          LIMIT 1`,
-        [mssv, mssv, name],
+        [mssv, mssv, name, mssv],
       );
       let userId = existing[0]?.id;
       if (userId) {
-        await connection.execute(
-          `UPDATE users SET full_name = ?, student_code = NULLIF(?, ''), phone = NULLIF(?, ''),
-           total_work_days = ?, total_work_hours = ? WHERE id = ?`,
-          [name, mssv, phone, totalWorkDays, totalWorkHours, userId],
-        );
+        if (mssv) {
+          await connection.execute(
+            `UPDATE users SET full_name = ?, student_code = ?, phone = NULLIF(?, ''),
+             total_work_days = ?, total_work_hours = ? WHERE id = ?`,
+            [name, mssv, phone, totalWorkDays, totalWorkHours, userId],
+          );
+        } else {
+          await connection.execute(
+            `UPDATE users SET full_name = ?, student_code = NULL, phone = NULLIF(?, ''),
+             password_hash = ?, must_change_password = TRUE,
+             total_work_days = ?, total_work_hours = ? WHERE id = ?`,
+            [name, phone, noStudentCodePasswordHash, totalWorkDays, totalWorkHours, userId],
+          );
+        }
       } else {
         const [created] = await connection.execute(
           `INSERT INTO users
            (full_name, student_code, phone, username, password_hash, role, must_change_password, total_work_days, total_work_hours)
            VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?, ?)`,
-          [name, mssv, phone, name, defaultPasswordHash, totalWorkDays, totalWorkHours],
+          [name, mssv, phone, name, mssv ? defaultPasswordHash : noStudentCodePasswordHash, totalWorkDays, totalWorkHours],
         );
         userId = created.insertId;
       }
@@ -129,7 +144,7 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       imported += 1;
     }
     await connection.commit();
-    return response.status(201).json({ success: true, imported, unmatched });
+    return response.status(201).json({ success: true, imported, unmatched, noStudentCodeUsers });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -1206,6 +1221,102 @@ router.put('/shifts-config/:id', async (request, response, next) => {
       [name, start_time, end_time, is_active ? 1 : 0, request.params.id]
     );
     return response.json({ success: true, message: 'Cập nhật thành công' });
+  } catch (error) {
+    return next(error);
+  }
+});
+router.get('/face-requests', async (request, response, next) => {
+  try {
+    const status = request.query.status || 'PENDING';
+    const [rows] = await pool.execute(
+      `SELECT req.id, req.user_id, req.status, req.created_at, req.new_face_image, u.full_name, u.student_code
+       FROM face_re_registration_requests req
+       JOIN users u ON req.user_id = u.id
+       WHERE req.status = ?
+       ORDER BY req.created_at DESC`,
+      [status]
+    );
+    return response.json({ success: true, data: rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post('/face-requests/:id/approve', async (request, response, next) => {
+  let connection;
+  try {
+    const requestId = request.params.id;
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+
+    const [requests] = await connection.execute(
+      'SELECT id, user_id, status, new_face_embedding FROM face_re_registration_requests WHERE id = ? FOR UPDATE',
+      [requestId]
+    );
+
+    if (!requests.length) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy yêu cầu' });
+    }
+
+    const req = requests[0];
+    if (req.status !== 'PENDING') {
+      await connection.rollback();
+      return response.status(400).json({ success: false, message: 'Yêu cầu này đã được xử lý' });
+    }
+
+    const replacementEmbedding = parseFaceEmbedding(req.new_face_embedding);
+    if (!replacementEmbedding) {
+      await connection.rollback();
+      return response.status(400).json({ success: false, message: 'Dữ liệu khuôn mặt trong yêu cầu không hợp lệ.' });
+    }
+
+    await connection.execute(
+      'UPDATE users SET face_embedding = ?, face_registered = TRUE WHERE id = ?',
+      [JSON.stringify(replacementEmbedding), req.user_id]
+    );
+
+    await connection.execute(
+      'UPDATE face_re_registration_requests SET status = ?, reviewed_at = NOW(), reviewed_by = ? WHERE id = ?',
+      ['APPROVED', request.user.userId, requestId]
+    );
+
+    await connection.commit();
+    return response.json({ success: true, message: 'Đã duyệt yêu cầu đăng ký lại khuôn mặt' });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    return next(error);
+  } finally {
+    if (connection) connection.release();
+  }
+});
+
+router.post('/face-requests/:id/reject', async (request, response, next) => {
+  try {
+    const requestId = request.params.id;
+    const reason = typeof request.body.reason === 'string'
+      ? request.body.reason.trim().slice(0, 500) || null
+      : null;
+
+    const [requests] = await pool.execute(
+      'SELECT id, status FROM face_re_registration_requests WHERE id = ?',
+      [requestId]
+    );
+
+    if (!requests.length) {
+      return response.status(404).json({ success: false, message: 'Không tìm thấy yêu cầu' });
+    }
+
+    if (requests[0].status !== 'PENDING') {
+      return response.status(400).json({ success: false, message: 'Yêu cầu này đã được xử lý' });
+    }
+
+    await pool.execute(
+      'UPDATE face_re_registration_requests SET status = ?, rejection_reason = ?, reviewed_at = NOW(), reviewed_by = ? WHERE id = ?',
+      ['REJECTED', reason, request.user.userId, requestId]
+    );
+
+    return response.json({ success: true, message: 'Đã từ chối yêu cầu' });
   } catch (error) {
     return next(error);
   }

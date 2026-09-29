@@ -107,6 +107,7 @@ function isSecureCameraContext() {
 const adminNavItems = [
   { label: 'Dashboard', icon: LayoutDashboard },
   { label: 'Chấm công', icon: CalendarCheck },
+  { label: 'Khuôn mặt', icon: Camera },
   { label: 'Lịch sử', icon: FileClock },
   { label: 'Quản lý sinh viên', icon: UsersRound },
   { label: 'Quản lý ca làm', icon: Clock3 },
@@ -114,6 +115,7 @@ const adminNavItems = [
 ];
 const userNavItems = [
   { label: 'Chấm công', icon: CalendarCheck },
+  { label: 'Khuôn mặt', icon: Camera },
   { label: 'Lịch sử cá nhân', icon: FileClock },
   { label: 'Hồ sơ', icon: UserRound },
 ];
@@ -227,7 +229,7 @@ function parseAttendanceWorkbook(buffer) {
       summary.shifts += 1;
       records.push({ userName, userMSSV, date: dates[column], shiftCode: shift.code, totalHours: (new Date(`1970-01-01T${shift.end}`) - new Date(`1970-01-01T${shift.start}`)) / 3600000 });
     }
-    if (summary.shifts || summary.totalWorkDays) members.set(`${userMSSV}|${userName.toLowerCase()}`, summary);
+    members.set(`${userMSSV}|${userName.toLowerCase()}`, summary);
   }
   return { members: [...members.values()], records: records.map((record) => ({ ...record, totalWorkDays: members.get(`${record.userMSSV}|${record.userName.toLowerCase()}`)?.totalWorkDays || 0 })) };
 }
@@ -242,16 +244,16 @@ async function compressWebcamFrame(video) {
   return canvas.toDataURL('image/jpeg', 0.7);
 }
 
-async function registerFaceEmbedding(user, embeddings) {
+async function replaceFaceEmbedding(user, embeddings) {
   const token = localStorage.getItem('attendance_token');
-  const response = await fetch(`${apiUrl}/face/register`, {
+  const response = await fetch(`${apiUrl}/face/register/replace`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ embedding: embeddings[0], embeddings }),
   });
   const body = await response.json();
   if (!response.ok || !body.success) {
-    throw Object.assign(new Error(body.message || 'Không thể cập nhật khuôn mặt.'), { code: body.errorCode });
+    throw new Error(body.message || 'Không thể đăng ký lại khuôn mặt.');
   }
   const updatedUser = { ...user, faceRegistered: true };
   Object.assign(user, updatedUser);
@@ -259,9 +261,23 @@ async function registerFaceEmbedding(user, embeddings) {
   return body;
 }
 
+async function requestFaceRegistration(embeddings, image) {
+  const token = localStorage.getItem('attendance_token');
+  const response = await fetch(`${apiUrl}/face/register/request`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ embedding: embeddings[0], embeddings, image }),
+  });
+  const body = await response.json();
+  if (!response.ok || !body.success) {
+    throw new Error(body.message || 'Không thể gửi yêu cầu đăng ký lại khuôn mặt.');
+  }
+  return body;
+}
+
 async function submitAttendance(user, action, embeddings, imageData, shiftCode) {
-  if (action === 'CHECK_IN' && !user.faceRegistered) {
-    await registerFaceEmbedding(user, embeddings);
+  if (action === 'CHECK_IN' && !user.faceRegistered && user.role === 'ADMIN') {
+    await replaceFaceEmbedding(user, embeddings);
   }
 
   const token = localStorage.getItem('attendance_token');
@@ -280,11 +296,6 @@ async function submitAttendance(user, action, embeddings, imageData, shiftCode) 
 
   let response = await request();
   let body = await response.json();
-  if (action === 'CHECK_IN' && !response.ok && body.errorCode === 'FACE_NOT_REGISTERED') {
-    await registerFaceEmbedding(user, embeddings);
-    response = await request();
-    body = await response.json();
-  }
   if (!response.ok || !body.success) {
     throw Object.assign(new Error(body.message || 'Không thể ghi nhận chấm công.'), { code: body.errorCode });
   }
@@ -562,6 +573,7 @@ function formatNotificationTime(value) {
 }
 
 function PageContent({ page, user, onUserUpdated }) {
+  if (page === 'Khuôn mặt') return <FaceRegistrationPage user={user} onUserUpdated={onUserUpdated} />;
   if (user.role === 'USER') {
     if (page === 'Lịch sử cá nhân') return <AttendanceHistory user={user} />;
     if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
@@ -691,7 +703,7 @@ function AdminAttendanceWorkArea({ user }) {
         <small className="face-action-note">Ảnh được nén phía trình duyệt trước khi gửi và bản ghi sẽ chờ Admin duyệt.</small>
       </div>
     </div>
-    {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
+    {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} onReplaceFace={(embeddings) => replaceFaceEmbedding(user, embeddings)} />}
   </section>;
 }
 
@@ -764,6 +776,149 @@ function UserProfile({ user, onUserUpdated }) {
     <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={user.username} disabled /></label><label>MSSV<input value={profile.studentCode} onChange={(event) => setProfile({ ...profile, studentCode: event.target.value })} placeholder="Nhập mã số sinh viên" /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
     <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>{user.role === 'ADMIN' ? 'Admin đang đăng nhập có thể đặt mật khẩu mới mà không cần nhập mật khẩu cũ.' : 'Nếu chưa đổi lần đầu, dùng mật khẩu khởi tạo hiện tại.'}</p></div><LockKeyhole size={20} /></div>{user.role !== 'ADMIN' && <label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label>}<label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
   </div></section>;
+}
+
+function FaceRegistrationPage({ user, onUserUpdated }) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [requests, setRequests] = useState([]);
+  const [myRequest, setMyRequest] = useState(null);
+  const [loading, setLoading] = useState(user.role === 'ADMIN');
+  const [processingId, setProcessingId] = useState(null);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const token = localStorage.getItem('attendance_token');
+  const headers = { Authorization: `Bearer ${token}` };
+
+  async function loadFaceData() {
+    setError('');
+    if (user.role === 'ADMIN') {
+      const response = await fetch(`${apiUrl}/admin/face-requests?status=PENDING`, { cache: 'no-store', headers });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể tải yêu cầu đăng ký lại khuôn mặt.');
+      setRequests(body.data || []);
+      setLoading(false);
+      return;
+    }
+    const response = await fetch(`${apiUrl}/face/register/my-request`, { cache: 'no-store', headers });
+    const body = await response.json();
+    if (!response.ok || !body.success) throw new Error(body.message || 'Không thể tải trạng thái yêu cầu khuôn mặt.');
+    setMyRequest(body.data || null);
+  }
+
+  useEffect(() => {
+    loadFaceData().catch((requestError) => {
+      setError(requestError.message || 'Không thể tải dữ liệu khuôn mặt.');
+      setLoading(false);
+    });
+  }, [user.role]);
+
+  async function registerFace(embeddings, image) {
+    setError('');
+    setMessage('');
+    if (user.role === 'ADMIN') {
+      const result = await replaceFaceEmbedding(user, embeddings);
+      onUserUpdated({ ...user, faceRegistered: true });
+      setMessage(result.message);
+      return;
+    }
+    const result = await requestFaceRegistration(embeddings, image);
+    setMessage(result.message);
+    await loadFaceData();
+  }
+
+  async function reviewRequest(requestId, decision) {
+    setProcessingId(requestId);
+    setError('');
+    setMessage('');
+    try {
+      let reason;
+      if (decision === 'reject') {
+        reason = window.prompt('Lý do từ chối (không bắt buộc):');
+        if (reason === null) return;
+      }
+      const response = await fetch(`${apiUrl}/admin/face-requests/${requestId}/${decision}`, {
+        method: 'POST',
+        headers: { ...headers, 'Content-Type': 'application/json' },
+        ...(decision === 'reject' ? { body: JSON.stringify({ reason }) } : {}),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.message || 'Không thể xử lý yêu cầu.');
+      setMessage(body.message);
+      await loadFaceData();
+    } catch (requestError) {
+      setError(requestError.message || 'Không thể xử lý yêu cầu.');
+    } finally {
+      setProcessingId(null);
+    }
+  }
+
+  const requestIsPending = myRequest?.status === 'PENDING';
+
+  return <section className="profile-page">
+    <div className="profile-page-heading">
+      <span className="section-label">FACE ID</span>
+      <h2>Đăng ký khuôn mặt</h2>
+      <p>{user.role === 'ADMIN' ? 'Cập nhật khuôn mặt tài khoản Admin và duyệt yêu cầu của thành viên.' : 'Gửi khuôn mặt mới để Admin kiểm tra và duyệt trước khi sử dụng chấm công.'}</p>
+    </div>
+    {error && <div className="form-error">{error}</div>}
+    {message && <div className="form-success">{message}</div>}
+    <div className="content-panel profile-form">
+      <div className="panel-heading">
+        <div>
+          <h3>Khuôn mặt của {user.role === 'ADMIN' ? 'Admin' : 'bạn'}</h3>
+          <p>{user.faceRegistered ? 'Tài khoản đã có dữ liệu khuôn mặt.' : 'Tài khoản chưa có dữ liệu khuôn mặt hợp lệ.'}</p>
+        </div>
+        <Camera size={20} />
+      </div>
+      {user.role === 'USER' && myRequest && (
+        <div className={requestIsPending ? 'approval-note' : myRequest.status === 'REJECTED' ? 'form-error' : 'form-success'}>
+          Yêu cầu gần nhất: {requestIsPending ? 'Đang chờ Admin duyệt.' : myRequest.status === 'APPROVED' ? 'Đã được duyệt.' : 'Bị từ chối.'}
+          {myRequest.rejection_reason ? ` Lý do: ${myRequest.rejection_reason}` : ''}
+        </div>
+      )}
+      {user.role === 'ADMIN' || !requestIsPending ? (
+        <button className="secondary-button" type="button" onClick={() => setModalOpen(true)}>
+          {user.faceRegistered ? 'ĐĂNG KÝ LẠI KHUÔN MẶT' : 'ĐĂNG KÝ KHUÔN MẶT'}
+        </button>
+      ) : (
+        <button className="secondary-button" type="button" disabled>
+          ĐANG CHỜ ADMIN DUYỆT
+        </button>
+      )}
+    </div>
+
+    {user.role === 'ADMIN' && (
+      <div className="content-panel profile-form" style={{ marginTop: 16 }}>
+        <div className="panel-heading">
+          <div><h3>Yêu cầu từ thành viên</h3><p>Kiểm tra ảnh và duyệt trước khi thay dữ liệu khuôn mặt hiện có.</p></div>
+          <span className="live-dot">{requests.length} CHỜ DUYỆT</span>
+        </div>
+        {loading ? <div className="history-empty">Đang tải yêu cầu...</div> : requests.length ? (
+          <div className="imported-record-list">
+            {requests.map((item) => (
+              <div className="imported-record face-request-item" key={item.id}>
+                <span>{item.full_name}<small>{item.student_code || 'Chưa có MSSV'} · {new Date(item.created_at).toLocaleString('vi-VN')}</small></span>
+                {item.new_face_image && <img src={item.new_face_image} alt={`Ảnh đăng ký mới của ${item.full_name}`} />}
+                <div className="modal-actions">
+                  <button className="secondary-button" type="button" disabled={processingId === item.id} onClick={() => reviewRequest(item.id, 'reject')}>Từ chối</button>
+                  <button className="primary-button" type="button" disabled={processingId === item.id} onClick={() => reviewRequest(item.id, 'approve')}>{processingId === item.id ? 'ĐANG XỬ LÝ...' : 'Duyệt'}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <div className="history-empty">Hiện không có yêu cầu nào chờ duyệt.</div>}
+      </div>
+    )}
+    {modalOpen && (
+      <FaceModal
+        checkedIn={false}
+        faceRegistered={Boolean(user.faceRegistered)}
+        registrationOnly
+        onClose={() => setModalOpen(false)}
+        onSuccess={registerFace}
+      />
+    )}
+  </section>;
 }
 
 function UserPortal({ user }) {
@@ -876,7 +1031,7 @@ function UserPortal({ user }) {
 <Camera size={16} /> {checkedIn ? 'QUÉT KHUÔN MẶT CHECK-OUT' : 'QUÉT KHUÔN MẶT CHECK-IN'} <ArrowRight size={15} />
 </button>
 </div></div><div className="content-panel"><div className="panel-heading"><div><h3>Lịch sử cá nhân</h3><p>Các lượt chấm công gần đây</p></div></div><div className="user-recent-history">{records.slice(0, 5).map((record) => <div className="status-line" key={record.id}><span>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}</span><strong>{record.check_in ? new Date(record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'} · {record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Bị từ chối' : 'Chờ duyệt'}</strong></div>)}{!records.length && <div className="history-empty">Chưa có lịch sử chấm công.</div>}</div></div></section>
-    {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
+    {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} onReplaceFace={(embeddings, image) => requestFaceRegistration(embeddings, image)} recoveryRequiresApproval onRecoverySubmitted={(result) => setCheckInFeedback({ isLate: false, message: result.message })} />}
   </div>;
 }
 
@@ -1298,7 +1453,7 @@ function AdminDashboard({ user }) {
         </div>
       )}
     </section>
-    {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} />}
+    {faceModal && <FaceModal checkedIn={checkedIn} faceRegistered={Boolean(user.faceRegistered)} onClose={() => setFaceModal(false)} onSuccess={handleFaceSuccess} onReplaceFace={(embeddings) => replaceFaceEmbedding(user, embeddings)} />}
     {photoPreview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPhotoPreview(null)}><motion.div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPhotoPreview(null)}><X size={18} /></button><img src={photoPreview} alt="Ảnh đối soát khuôn mặt" onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></motion.div></motion.div>}
     <AnimatePresence>
       {showAllModal && (
@@ -1760,7 +1915,7 @@ function ExcelImportCard() {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể lưu dữ liệu Excel.');
-      setMessage(`Đã nhập ${body.imported} lượt chấm công${body.unmatched?.length ? `; không khớp ${body.unmatched.length} dòng` : ''}.`);
+      setMessage(`Đã nhập ${body.imported} lượt chấm công${body.unmatched?.length ? `; không khớp ${body.unmatched.length} dòng` : ''}.${body.noStudentCodeUsers ? ` ${body.noStudentCodeUsers} tài khoản không có MSSV: đăng nhập bằng họ tên với mật khẩu user123 và đổi mật khẩu ở lần đăng nhập đầu tiên.` : ''}`);
       setPreview(null);
     } catch (error) {
       console.error('Chi tiết lỗi import Excel:', error);
@@ -2336,9 +2491,20 @@ function loadFaceModelsOnce() {
   return faceModelsPromise;
 }
 
-function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
+function FaceModal({
+  checkedIn,
+  faceRegistered,
+  registrationOnly = false,
+  recoveryRequiresApproval = false,
+  onClose,
+  onSuccess,
+  onReplaceFace,
+  onRecoverySubmitted,
+}) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const lastEmbeddingsRef = useRef(null);
+  const lastImageRef = useRef(null);
   const cameraReadyRef = useRef(false);
   const modelsLoadedRef = useRef(false);
   const warmupPromiseRef = useRef(null);
@@ -2347,12 +2513,14 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
   const [modelReady, setModelReady] = useState(false);
   const [modelError, setModelError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showFaceRecovery, setShowFaceRecovery] = useState(false);
 
   async function detectFace(video) {
     const detect = async () => {
       for (const options of [
-        { inputSize: 320, scoreThreshold: 0.25 },
-        { inputSize: 224, scoreThreshold: 0.2 },
+        { inputSize: 320, scoreThreshold: 0.2 },
+        { inputSize: 416, scoreThreshold: 0.15 },
+        { inputSize: 224, scoreThreshold: 0.15 },
       ]) {
         const result = await faceapi
           .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions(options))
@@ -2475,6 +2643,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
     if (cameraState !== 'ready' || !videoRef.current?.videoWidth || submitting) return;
     setSubmitting(true);
     setCameraError('');
+    setShowFaceRecovery(false);
     try {
       const scanStartedAt = performance.now();
       const video = videoRef.current;
@@ -2489,13 +2658,45 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
         throw new Error('Chưa nhận diện được khuôn mặt. Hãy lau camera, tăng ánh sáng, nhìn thẳng và đưa mặt vào giữa khung hình rồi thử lại.');
       }
       const imageData = await compressWebcamFrame(video);
+      if (registrationOnly) {
+        await onSuccess(embeddings, imageData);
+        onClose();
+        return;
+      }
+      lastEmbeddingsRef.current = embeddings;
+      lastImageRef.current = imageData;
       console.info(`Face scan completed in ${Math.round(performance.now() - scanStartedAt)}ms.`);
       await onSuccess(embeddings, imageData);
       onClose();
     } catch (error) {
       setCameraError(error.code === 'FACE_MISMATCH'
-        ? 'Khuôn mặt chưa khớp với tài khoản. Hãy lau camera, nhìn thẳng, đủ ánh sáng và thử lại. Nếu vẫn lỗi, liên hệ quản trị viên để kiểm tra dữ liệu khuôn mặt đã đăng ký.'
+        ? 'Khuôn mặt chưa khớp với dữ liệu đã lưu. Bạn có thể thử lại hoặc đăng ký lại bằng camera này.'
         : error.message);
+      setShowFaceRecovery(['FACE_MISMATCH', 'FACE_NOT_REGISTERED'].includes(error.code) && Boolean(lastEmbeddingsRef.current));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function recoverFaceAndRetry() {
+    const embeddings = lastEmbeddingsRef.current;
+    const imageData = lastImageRef.current;
+    if (!embeddings || !imageData || !onReplaceFace || submitting) return;
+    setSubmitting(true);
+    setCameraError('');
+    setShowFaceRecovery(false);
+    try {
+      const result = recoveryRequiresApproval
+        ? await onReplaceFace(embeddings, imageData)
+        : await onReplaceFace(embeddings);
+      if (recoveryRequiresApproval) {
+        onRecoverySubmitted?.(result);
+      } else {
+        await onSuccess(embeddings, imageData);
+      }
+      onClose();
+    } catch (error) {
+      setCameraError(error.message || 'Không thể đăng ký lại khuôn mặt.');
     } finally {
       setSubmitting(false);
     }
@@ -2508,7 +2709,7 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
           <span className="section-label">FACE AUTHENTICATION</span>
           <button className="modal-close" aria-label="Đóng" onClick={onClose}>✕</button>
         </div>
-        <h2>{checkedIn ? 'Xác nhận check-out' : faceRegistered ? 'Xác thực check-in' : 'Đăng ký khuôn mặt'}</h2>
+        <h2>{registrationOnly ? 'Đăng ký lại khuôn mặt' : checkedIn ? 'Xác nhận check-out' : faceRegistered ? 'Xác thực check-in' : 'Đăng ký khuôn mặt'}</h2>
         <div className="camera-stage">
           {cameraState === 'error' ? (
             <div className="camera-message">
@@ -2525,8 +2726,8 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
           )}
         </div>
         <p>
-          {cameraState === 'starting' ? 'Đang khởi động camera...' : 
-           cameraState === 'ready' ? 'Đưa khuôn mặt vào khung hình, sau đó xác nhận trực tiếp.' : 
+          {cameraState === 'starting' ? 'Đang khởi động camera...' :
+           cameraState === 'ready' ? 'Đưa khuôn mặt vào khung hình, nhìn thẳng và giữ yên khi xác nhận.' :
            'Vui lòng cấp quyền camera và thử lại.'}
         </p>
         {cameraError && cameraState !== 'error' && <div className="camera-error">{cameraError}</div>}
@@ -2537,8 +2738,13 @@ function FaceModal({ checkedIn, faceRegistered, onClose, onSuccess }) {
           disabled={cameraState !== 'ready' || submitting || !modelReady}
           onClick={confirmAttendance}
         >
-          {cameraState !== 'ready' ? 'ĐANG MỞ CAMERA...' : submitting ? 'ĐANG XÁC THỰC...' : !modelReady ? 'ĐANG TẢI NHẬN DIỆN...' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN'}
+          {cameraState !== 'ready' ? 'ĐANG MỞ CAMERA...' : submitting ? 'ĐANG XÁC THỰC...' : !modelReady ? 'ĐANG TẢI NHẬN DIỆN...' : registrationOnly ? 'LƯU KHUÔN MẶT MỚI' : checkedIn ? 'XÁC NHẬN CHECK-OUT' : faceRegistered ? 'XÁC NHẬN CHECK-IN' : 'ĐĂNG KÝ VÀ CHECK-IN'}
         </button>
+        {showFaceRecovery && (
+          <button className="secondary-button" type="button" disabled={submitting} onClick={recoverFaceAndRetry}>
+            {submitting ? 'ĐANG CẬP NHẬT...' : 'ĐĂNG KÝ LẠI VÀ THỬ CHẤM CÔNG'}
+          </button>
+        )}
       </motion.div>
     </motion.div>
   );

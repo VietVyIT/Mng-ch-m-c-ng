@@ -67,7 +67,7 @@ router.post('/login', async (request, response, next) => {
       });
     }
 
-    const trimmedUser = username.trim();
+    const trimmedUser = username.trim().replace(/\s+/g, ' ');
     const [rows] = await pool.execute(
       `SELECT id, full_name, username, email, password_hash, role, face_registered, face_embedding,
               must_change_password, total_work_days, student_code, phone, address,
@@ -103,7 +103,7 @@ router.post('/login', async (request, response, next) => {
         || matchesInitialPassword(password, user);
       const initialPasswordHint = user.student_code?.trim()
         ? `MSSV "${user.student_code}", "user123" hoặc "user123@"`
-        : '"user123" hoặc "user123@"';
+        : '"user123"';
       if (!passwordMatches) hintMessage = `Mật khẩu không đúng. Mật khẩu khởi tạo có thể là ${initialPasswordHint}.`;
     }
 

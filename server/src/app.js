@@ -28,7 +28,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
       styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       fontSrc: ["'self'", "https://fonts.gstatic.com"],
-      connectSrc: ["'self'", "http://localhost:*", "ws://localhost:*", "http://*:*", "ws://*:*"],
+      connectSrc: ["'self'", "http://localhost:*", "ws://localhost:*", "http://*:*", "ws://*:*", "https://justadudewhohacks.github.io"],
     },
   },
 }));
@@ -68,4 +68,3 @@ if (env.nodeEnv === 'production') {
 app.use(errorMiddleware);
 
 export default app;
-
