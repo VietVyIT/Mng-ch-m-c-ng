@@ -750,7 +750,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
       </aside>
       <main className="dashboard-main">
         <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><h1>{page}</h1></div><div className="header-user"><NotificationCenter onNavigate={onNavigate} /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
-        <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} /></motion.div></AnimatePresence>
+        <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} onNavigate={onNavigate} /></motion.div></AnimatePresence>
       </main>
     </div>
   );
@@ -854,7 +854,7 @@ function formatNotificationTime(value) {
   return `${Math.floor(hours / 24)} ngày trước`;
 }
 
-function PageContent({ page, user, onUserUpdated }) {
+function PageContent({ page, user, onUserUpdated, onNavigate }) {
   if (page === 'Khuôn mặt') return <FaceRegistrationPage user={user} onUserUpdated={onUserUpdated} />;
   if (user.role === 'USER') {
     if (page === 'Lịch sử cá nhân') return <AttendanceHistory user={user} />;
@@ -867,7 +867,7 @@ function PageContent({ page, user, onUserUpdated }) {
   if (page === 'Lịch sử') return <AttendanceHistory user={user} />;
   if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
   if (page !== 'Dashboard') return <section className="placeholder-page"><div className="placeholder-icon"><FileClock size={28} /></div><span className="section-label">AUTHORIZED AREA</span><h2>{page}</h2><p>Chức năng này đã được bảo vệ bằng JWT và vai trò <strong>{user.role}</strong>. Nội dung nghiệp vụ sẽ được triển khai ở phase tiếp theo.</p></section>;
-  return <AdminDashboard user={user} />;
+  return <AdminDashboard user={user} onNavigate={onNavigate} />;
 }
 
 function AdminAttendanceWorkArea({ user }) {
@@ -1822,11 +1822,13 @@ function AttendanceHistory({ user }) {
   return <section className="history-page"><div className="history-heading"><div><span className="section-label">{user.role === 'ADMIN' ? 'ADMIN ATTENDANCE' : 'MY ATTENDANCE'}</span><h2>Lịch sử chấm công</h2><p>{user.role === 'ADMIN' ? 'Quản trị viên có thể xem lịch sử, ảnh và xóa bản ghi của tất cả thành viên.' : 'Bạn chỉ có thể xem lịch sử chấm công của chính mình, gồm dữ liệu camera và Excel.'}</p></div></div>{error && <div className="form-error">{error}</div>}<div className="history-table-wrap"><table className="history-table"><thead><tr><th>Nhân viên</th><th>Nguồn</th><th>Ngày / Ca</th><th>Check-in</th><th>Check-out</th><th>Trạng thái</th><th>Ảnh đối soát</th>{user.role === 'ADMIN' && <th>Thao tác</th>}</tr></thead><tbody>{records.length ? records.map((record) => <tr key={`${record.source || 'attendance'}-${record.id}-${record.check_in_event_id || ''}`}><td><strong>{record.full_name || user.fullName || user.username}</strong>{record.username && <small>{record.username}</small>}</td><td>{record.source === 'Excel Import' ? 'Excel' : 'Camera'}</td><td>{new Date(record.attendance_date).toLocaleDateString('vi-VN')}<small>{formatShiftName({ name: record.shift_name })}</small></td><td><strong>{record.check_in_captured_at || record.check_in ? new Date(record.check_in_captured_at || record.check_in).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_in_event_status || (record.check_in ? record.status : '—')}</small></td><td><strong>{record.check_out_captured_at || record.check_out ? new Date(record.check_out_captured_at || record.check_out).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '—:—'}</strong><small>{record.check_out_event_status || (record.check_out ? record.status : '—')}</small></td><td><span className={`status-badge ${(record.punctuality_status || 'pending').toLowerCase()}`}>{record.punctuality_status === 'LATE' ? 'Đi làm trễ' : record.status === 'APPROVED' ? 'Đã duyệt' : record.status === 'REJECTED' ? 'Từ chối' : 'Chờ duyệt'}</span></td>  <td className="history-photos"><button disabled={record.check_in_photo_available === 0 || record.check_in_photo_expired} onClick={() => openPhoto(record, 'check-in')}>In {record.check_in_photo_expired ? '· Hết hạn' : ''}</button><button disabled={record.check_out_photo_available === 0 || record.check_out_photo_expired} onClick={() => openPhoto(record, 'check-out')}>Out {record.check_out_photo_expired ? '· Hết hạn' : ''}</button></td>{user.role === 'ADMIN' && <td><button className="delete-attendance-button" disabled={deletingId === record.id} onClick={() => { setDeleteTarget(record); setDeleteReason(''); }}>{deletingId === record.id ? 'ĐANG XÓA...' : 'XÓA'}</button></td>}</tr>) : <tr><td colSpan={user.role === 'ADMIN' ? 8 : 7} className="history-empty">Chưa có lịch sử chấm công.</td></tr>}</tbody></table></div>{preview && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={() => setPreview(null)}><div className="photo-preview-modal" onClick={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => setPreview(null)}><X size={18} /></button><span className="section-label">{preview.label}</span><img src={preview.url} alt={preview.label} onError={(e) => { e.target.onerror = null; e.target.src = 'https://placehold.co/400x300?text=Không+thể+tải+ảnh'; }} /></div></motion.div>}{deleteTarget && <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }}><div className="delete-modal"><button className="modal-close" onClick={() => setDeleteTarget(null)}><X size={18} /></button><h3>Bạn có chắc chắn muốn xóa bản ghi chấm công này?</h3><p>{deleteTarget.full_name} · {formatShiftName({ name: deleteTarget.shift_name })}</p><textarea value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} placeholder="Lý do xóa (Không bắt buộc)" maxLength={500} /><div className="delete-modal-actions"><button className="secondary-button" onClick={() => setDeleteTarget(null)}>Hủy</button><button className="delete-attendance-button" onClick={() => deleteAttendance(deleteTarget)}>Xác nhận xóa</button></div></div></motion.div>}</section>;
 }
 
-function AdminDashboard({ user }) {
+function AdminDashboard({ user, onNavigate }) {
   const [faceModal, setFaceModal] = useState(false);
   const [latestAttendance, setLatestAttendance] = useState(null);
   const [approvals, setApprovals] = useState([]);
   const [approvalLoadError, setApprovalLoadError] = useState('');
+  const [pendingFaceRequests, setPendingFaceRequests] = useState(0);
+  const [faceRequestLoadError, setFaceRequestLoadError] = useState('');
   const [todayShift, setTodayShift] = useState(null);
   const attendanceWindow = useAttendanceWindow(todayShift, latestAttendance);
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
@@ -1883,6 +1885,26 @@ function AdminDashboard({ user }) {
     }
   }
 
+  async function loadPendingFaceRequests() {
+    const token = localStorage.getItem('attendance_token');
+    try {
+      const response = await fetch(`${apiUrl}/admin/face-requests?status=PENDING`, {
+        cache: 'no-store',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error('Không thể tải yêu cầu đăng ký lại khuôn mặt.');
+      const body = await response.json();
+      if (!body.success || !Array.isArray(body.data)) {
+        throw new Error(body.message || 'Dữ liệu yêu cầu khuôn mặt không hợp lệ.');
+      }
+      setPendingFaceRequests(body.data.length);
+      setFaceRequestLoadError('');
+    } catch (err) {
+      setFaceRequestLoadError(err.message || 'Không thể tải yêu cầu đăng ký lại khuôn mặt.');
+      console.error('Lỗi tải yêu cầu khuôn mặt:', err);
+    }
+  }
+
   async function loadActiveShifts() {
     const token = localStorage.getItem('attendance_token');
     const response = await fetch(`${apiUrl}/attendance/shifts/today`, {
@@ -1924,6 +1946,9 @@ function AdminDashboard({ user }) {
     const approvalPoll = user.role === 'ADMIN'
       ? window.setInterval(() => { void loadApprovals(); }, 8000)
       : null;
+    const faceRequestPoll = user.role === 'ADMIN'
+      ? window.setInterval(() => { void loadPendingFaceRequests(); }, 8000)
+      : null;
     const shiftPoll = user.role === 'ADMIN'
       ? window.setInterval(() => { loadActiveShifts().catch((err) => console.error('Lỗi tải trạng thái ca:', err)); }, 8000)
       : null;
@@ -1938,12 +1963,16 @@ function AdminDashboard({ user }) {
       })
       .catch((err) => console.error('Không thể tải trạng thái chấm công:', err));
     loadActiveShifts().catch((err) => console.error('Lỗi tải trạng thái ca:', err));
-    if (user.role === 'ADMIN') void loadApprovals();
+    if (user.role === 'ADMIN') {
+      void loadApprovals();
+      void loadPendingFaceRequests();
+    }
     if (user.role === 'ADMIN') {
       loadDashboardStats();
     }
     return () => {
       if (approvalPoll !== null) window.clearInterval(approvalPoll);
+      if (faceRequestPoll !== null) window.clearInterval(faceRequestPoll);
       if (shiftPoll !== null) window.clearInterval(shiftPoll);
     };
   }, []);
@@ -2146,6 +2175,19 @@ function AdminDashboard({ user }) {
       <DashboardStatCard icon={Clock3} tone="green" title="Tổng giờ công" value={statsLoading ? '...' : `${Number(dashboardStats?.totalHours || 0).toLocaleString('vi-VN')} giờ`} detail="Dữ liệu toàn hệ thống" />
       <DashboardStatCard icon={UsersRound} tone="purple" title="Chờ phê duyệt" value={approvals.length} detail="Yêu cầu chấm công" />
     </section>
+    {(pendingFaceRequests > 0 || faceRequestLoadError) && (
+      <section className="pending-face-requests-notice" role={faceRequestLoadError ? 'alert' : 'status'}>
+        <div>
+          <strong>{faceRequestLoadError ? 'Không tải được yêu cầu khuôn mặt' : `${pendingFaceRequests} yêu cầu đăng ký lại khuôn mặt đang chờ duyệt`}</strong>
+          <p>{faceRequestLoadError || 'Yêu cầu này được duyệt riêng, không nằm trong danh sách chấm công bên dưới.'}</p>
+        </div>
+        {!faceRequestLoadError && (
+          <button type="button" onClick={() => onNavigate('Khuôn mặt')}>
+            Xem và duyệt <ArrowRight size={15} />
+          </button>
+        )}
+      </section>
+    )}
     <section className="approval-panel content-panel">
       <div className="panel-heading">
         <div>
@@ -2936,7 +2978,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
   });
 
   return (
-    <motion.div className="modal-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+    <motion.div className="modal-backdrop all-requests-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
       <div className="all-requests-modal" onClick={(e) => e.stopPropagation()}>
         <div className="all-requests-header">
           <div>
@@ -3031,13 +3073,13 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
                     : (item.attendance_date ? new Date(item.attendance_date).toLocaleDateString('vi-VN') : '--');
                   return (
                     <tr key={item.request_key || item.event_id} className={isLate ? 'row-late-table' : ''}>
-                      <td>{index + 1}</td>
-                      <td><strong>{item.full_name}</strong></td>
-                      <td><span className="student-code-tag">{item.student_code || '—'}</span></td>
-                      <td>{reqDate}</td>
-                      <td><span className="shift-pill">{formatShiftName({ name: item.shift_name })}</span></td>
-                      <td><strong>{item.event_type === 'CHECK_OUT' ? 'Check-out' : 'Check-in'} · {checkInTime}</strong></td>
-                      <td>
+                      <td data-label="STT">{index + 1}</td>
+                      <td data-label="Họ và tên"><strong>{item.full_name}</strong></td>
+                      <td data-label="MSSV"><span className="student-code-tag">{item.student_code || '—'}</span></td>
+                      <td data-label="Ngày">{reqDate}</td>
+                      <td data-label="Ca làm"><span className="shift-pill">{formatShiftName({ name: item.shift_name })}</span></td>
+                      <td data-label="Thời gian sự kiện"><strong>{item.event_type === 'CHECK_OUT' ? 'Check-out' : 'Check-in'} · {checkInTime}</strong></td>
+                      <td data-label="Tình trạng">
                         {isLate ? (
                           <span className="badge-late-warning">
                             <AlertTriangle size={12} />
@@ -3050,7 +3092,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
                           </span>
                         )}
                       </td>
-                      <td>
+                      <td data-label="Ảnh đối chiếu khuôn mặt">
                         <button
                           className="table-photo-btn"
                           onClick={() => onPreview(attendanceId)}
@@ -3059,7 +3101,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
                           📷 Xem ảnh
                         </button>
                       </td>
-                      <td style={{ textAlign: 'center' }}>
+                      <td data-label="Hành động" style={{ textAlign: 'center' }}>
                         <div className="table-action-btns">
                           <button
                             className="btn-table-approve"
@@ -3077,7 +3119,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
                   );
                 })
               ) : (
-                <tr>
+                <tr className="all-requests-empty-row">
                   <td colSpan={9} className="all-requests-empty">
                     Không tìm thấy yêu cầu chấm công nào phù hợp.
                   </td>
