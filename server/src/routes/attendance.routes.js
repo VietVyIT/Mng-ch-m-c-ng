@@ -4,6 +4,7 @@ import { env } from '../config/env.js';
 import { authenticate } from '../middlewares/auth.middleware.js';
 import { canCheckOutAt, getShiftAttendanceState } from '../utils/attendance-window.js';
 import { averageEmbeddings, faceDistance, parseFaceEmbedding, validateEmbedding } from '../utils/face.js';
+import { notifyAdministrators } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -193,6 +194,12 @@ router.post('/check-in', authenticate, async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', 'PENDING', ?, ?)`,
       [userMssv, user.full_name, effectiveShift, checkDate, fullDateTime, finalImage, isLate, lateMinutes]
     );
+    await notifyAdministrators(connection, {
+      type: 'ATTENDANCE_REQUEST',
+      title: 'Yêu cầu check-in mới',
+      message: `${user.full_name} gửi yêu cầu check-in ca ${effectiveShift}, đang chờ duyệt.`,
+      dateInfo: `${effectiveShift} - ${checkDate}`,
+    });
 
     await connection.commit();
     return res.status(200).json({
@@ -280,6 +287,12 @@ router.post('/check-out', authenticate, async (req, res) => {
       await connection.rollback();
       return res.status(409).json({ success: false, message: 'Ca này đã được check-out trước đó.' });
     }
+    await notifyAdministrators(connection, {
+      type: 'ATTENDANCE_REQUEST',
+      title: 'Yêu cầu check-out mới',
+      message: `${user.full_name} gửi yêu cầu check-out ca ${shiftInfo.id}, đang chờ duyệt.`,
+      dateInfo: `${shiftInfo.id} - ${checkDate}`,
+    });
 
     await connection.commit();
     return res.status(200).json({

@@ -199,7 +199,7 @@ DROP TABLE IF EXISTS `notifications`;
 CREATE TABLE `notifications` (
   `id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `recipient_id` bigint unsigned NOT NULL,
-  `type` enum('ATTENDANCE_APPROVED','ATTENDANCE_REJECTED','ATTENDANCE_DELETED','SYSTEM_ANNOUNCEMENT') COLLATE utf8mb4_unicode_ci NOT NULL,
+  `type` enum('ATTENDANCE_APPROVED','ATTENDANCE_REJECTED','ATTENDANCE_DELETED','SYSTEM_ANNOUNCEMENT','ATTENDANCE_REQUEST','FACE_REGISTRATION_REQUEST') COLLATE utf8mb4_unicode_ci NOT NULL,
   `title` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `message` text COLLATE utf8mb4_unicode_ci NOT NULL,
   `date_info` varchar(120) COLLATE utf8mb4_unicode_ci DEFAULT NULL,

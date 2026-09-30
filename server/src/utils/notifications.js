@@ -13,3 +13,15 @@ export async function createNotification(connection, {
     [recipientId, type, title, message, dateInfo, reason || null],
   );
 }
+
+export async function notifyAdministrators(connection, notification) {
+  const [admins] = await connection.execute(
+    "SELECT id FROM users WHERE role = 'ADMIN'",
+  );
+  for (const admin of admins) {
+    await createNotification(connection, {
+      ...notification,
+      recipientId: admin.id,
+    });
+  }
+}

@@ -65,6 +65,40 @@ export const initDatabase = async () => {
         KEY idx_face_re_registration_requests_status (status)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     );
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS notifications (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        recipient_id BIGINT UNSIGNED NOT NULL,
+        type ENUM(
+          'ATTENDANCE_APPROVED',
+          'ATTENDANCE_REJECTED',
+          'ATTENDANCE_DELETED',
+          'SYSTEM_ANNOUNCEMENT',
+          'ATTENDANCE_REQUEST',
+          'FACE_REGISTRATION_REQUEST'
+        ) NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        message TEXT NOT NULL,
+        date_info VARCHAR(120) NULL,
+        reason VARCHAR(500) NULL,
+        is_read BOOLEAN NOT NULL DEFAULT FALSE,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_notifications_recipient (recipient_id, is_read, created_at),
+        CONSTRAINT fk_notification_recipient FOREIGN KEY (recipient_id) REFERENCES users(id)
+          ON UPDATE CASCADE ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+    );
+    await connection.query(
+      `ALTER TABLE notifications MODIFY COLUMN type ENUM(
+        'ATTENDANCE_APPROVED',
+        'ATTENDANCE_REJECTED',
+        'ATTENDANCE_DELETED',
+        'SYSTEM_ANNOUNCEMENT',
+        'ATTENDANCE_REQUEST',
+        'FACE_REGISTRATION_REQUEST'
+      ) NOT NULL`
+    );
 
     // 2. Tạo bảng attendance_logs
     await connection.query(

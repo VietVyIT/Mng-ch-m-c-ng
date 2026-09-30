@@ -749,7 +749,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
         <div className="sidebar-bottom"><div className="account-card"><div className="user-avatar">{user.fullName?.charAt(0) || 'U'}</div><div><strong>{user.fullName || user.username}</strong><small>{user.role === 'ADMIN' ? 'Quản trị viên' : 'Người dùng'}</small></div></div><button className="sidebar-link logout-link" onClick={onLogout}><LogOut size={18} />Đăng xuất</button></div>
       </aside>
       <main className="dashboard-main">
-        <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><h1>{page}</h1></div><div className="header-user"><NotificationCenter /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
+        <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><h1>{page}</h1></div><div className="header-user"><NotificationCenter onNavigate={onNavigate} /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
         <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} /></motion.div></AnimatePresence>
       </main>
     </div>
@@ -788,22 +788,28 @@ function ProfileMenu({ user, onNavigate, onLogout }) {
   </div>;
 }
 
-function NotificationCenter() {
+function NotificationCenter({ onNavigate }) {
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [loadError, setLoadError] = useState('');
   const notificationRef = useRef(null);
   async function loadNotifications() {
     const token = localStorage.getItem('attendance_token');
     const response = await fetch(`${apiUrl}/notifications`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!response.ok) return;
-    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error('Không thể tải thông báo.');
+    const body = await response.json();
+    if (!body.success || !Array.isArray(body.data)) throw new Error(body.message || 'Dữ liệu thông báo không hợp lệ.');
     setNotifications(body.data || []);
     setUnreadCount(body.unreadCount || 0);
+    setLoadError('');
   }
   useEffect(() => {
-    loadNotifications().catch(() => {});
-    const timer = window.setInterval(() => loadNotifications().catch(() => {}), 30000);
+    const refresh = () => loadNotifications().catch((error) => {
+      setLoadError(error.message || 'Không thể tải thông báo.');
+    });
+    refresh();
+    const timer = window.setInterval(refresh, 8000);
     function closeOnOutside(event) {
       if (!notificationRef.current?.contains(event.target)) setOpen(false);
     }
@@ -815,17 +821,27 @@ function NotificationCenter() {
   }, []);
   async function markRead(id) {
     const token = localStorage.getItem('attendance_token');
-    await fetch(`${apiUrl}/notifications/${id}/read`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${apiUrl}/notifications/${id}/read`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Không thể cập nhật trạng thái thông báo.');
     setNotifications((items) => items.map((item) => item.id === id ? { ...item, is_read: 1 } : item));
     setUnreadCount((count) => Math.max(0, count - 1));
   }
   async function markAllRead() {
     const token = localStorage.getItem('attendance_token');
-    await fetch(`${apiUrl}/notifications/read-all`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`${apiUrl}/notifications/read-all`, { method: 'PATCH', headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error('Không thể đánh dấu thông báo đã đọc.');
     setNotifications((items) => items.map((item) => ({ ...item, is_read: 1 })));
     setUnreadCount(0);
   }
-  return <div className="notification-center" ref={notificationRef}><button className="notification-trigger" aria-label="Thông báo" onClick={() => setOpen((value) => !value)}><Bell size={19} />{unreadCount > 0 && <span className="notification-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}</button>{open && <><button className="notification-backdrop" aria-label="Đóng thông báo" onClick={() => setOpen(false)} /><div className="notification-popover"><div className="notification-heading"><strong>Thông báo</strong><button onClick={markAllRead}><CheckCheck size={14} /> Đánh dấu tất cả đã đọc</button></div><div className="notification-list">{notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.is_read ? 'read' : 'unread'}`} onClick={() => !item.is_read && markRead(item.id)}><span className={`notification-type ${item.type.toLowerCase()}`}>●</span><span><strong>{item.title}</strong><small>{item.message}</small><em>{formatNotificationTime(item.created_at)}</em></span></button>) : <div className="notification-empty">Chưa có thông báo.</div>}</div></div></>}</div>;
+  function openNotification(item) {
+    if (!item.is_read) {
+      markRead(item.id).catch((error) => setLoadError(error.message || 'Không thể cập nhật thông báo.'));
+    }
+    if (item.type === 'FACE_REGISTRATION_REQUEST') onNavigate('Khuôn mặt');
+    if (item.type === 'ATTENDANCE_REQUEST') onNavigate('Dashboard');
+    setOpen(false);
+  }
+  return <div className="notification-center" ref={notificationRef}><button className="notification-trigger" aria-label="Thông báo" onClick={() => setOpen((value) => !value)}><Bell size={19} />{unreadCount > 0 && <span className="notification-badge">{unreadCount > 99 ? '99+' : unreadCount}</span>}</button>{open && <><button className="notification-backdrop" aria-label="Đóng thông báo" onClick={() => setOpen(false)} /><div className="notification-popover"><div className="notification-heading"><strong>Thông báo</strong><button onClick={() => markAllRead().catch((error) => setLoadError(error.message || 'Không thể cập nhật thông báo.'))}><CheckCheck size={14} /> Đánh dấu tất cả đã đọc</button></div><div className="notification-list">{loadError ? <div className="notification-empty" role="alert">{loadError}</div> : notifications.length ? notifications.map((item) => <button key={item.id} className={`notification-item ${item.is_read ? 'read' : 'unread'}`} onClick={() => openNotification(item)}><span className={`notification-type ${item.type.toLowerCase()}`}>●</span><span><strong>{item.title}</strong><small>{item.message}</small><em>{formatNotificationTime(item.created_at)}</em></span></button>) : <div className="notification-empty">Chưa có thông báo.</div>}</div></div></>}</div>;
 }
 
 function formatNotificationTime(value) {
@@ -860,6 +876,7 @@ function AdminAttendanceWorkArea({ user }) {
   const attendanceWindow = useAttendanceWindow(shiftData, today);
   const [faceModal, setFaceModal] = useState(false);
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
   const canAttend = attendanceWindow.canAttend;
 
@@ -920,6 +937,9 @@ function AdminAttendanceWorkArea({ user }) {
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
     setFaceModal(false);
+    setSuccessMessage(body.message || (action === 'CHECK_IN'
+      ? 'Check-in thành công, đang chờ quản trị viên phê duyệt.'
+      : 'Check-out thành công, đang chờ quản trị viên phê duyệt.'));
     setToday((current) => mergeAttendanceRecords(current, {
       ...body.data,
       attendance_date: getVietnamDateString(),
@@ -944,6 +964,11 @@ function AdminAttendanceWorkArea({ user }) {
   const showNoShiftState = enabledShifts.length === 0 || attendanceWindow.state === 'UPCOMING';
 
   return <section className="attendance-work-area">
+    {successMessage && <div className="checkin-feedback-banner success" role="status" aria-live="polite">
+      <span className="feedback-icon">✓</span>
+      <p>{successMessage}</p>
+      <button className="feedback-close" onClick={() => setSuccessMessage('')} aria-label="Đóng thông báo">✕</button>
+    </div>}
     <div className="attendance-work-heading">
       <h2>Chấm công hàng ngày</h2>
       <span className="live-dot">LIVE</span>
@@ -1114,10 +1139,20 @@ function FaceRegistrationPage({ user, onUserUpdated }) {
   }
 
   useEffect(() => {
-    loadFaceData().catch((requestError) => {
+    let cancelled = false;
+    const refreshFaceData = () => loadFaceData().catch((requestError) => {
+      if (cancelled) return;
       setError(requestError.message || 'Không thể tải dữ liệu khuôn mặt.');
       setLoading(false);
     });
+    void refreshFaceData();
+    const refreshInterval = user.role === 'ADMIN'
+      ? window.setInterval(() => { void refreshFaceData(); }, 8000)
+      : null;
+    return () => {
+      cancelled = true;
+      if (refreshInterval !== null) window.clearInterval(refreshInterval);
+    };
   }, [user.role]);
 
   async function registerFace(embeddings, image) {
@@ -1791,6 +1826,7 @@ function AdminDashboard({ user }) {
   const [faceModal, setFaceModal] = useState(false);
   const [latestAttendance, setLatestAttendance] = useState(null);
   const [approvals, setApprovals] = useState([]);
+  const [approvalLoadError, setApprovalLoadError] = useState('');
   const [todayShift, setTodayShift] = useState(null);
   const attendanceWindow = useAttendanceWindow(todayShift, latestAttendance);
   const checkedIn = attendanceWindow.action === 'CHECK_OUT';
@@ -1840,7 +1876,9 @@ function AdminDashboard({ user }) {
       const body = await response.json();
       if (!body.success || !Array.isArray(body.data)) throw new Error(body.message || 'Dữ liệu yêu cầu duyệt không hợp lệ.');
       setApprovals(body.data);
+      setApprovalLoadError('');
     } catch (err) {
+      setApprovalLoadError(err.message || 'Không thể tải danh sách yêu cầu duyệt.');
       console.error('Lỗi tải danh sách duyệt:', err);
     }
   }
@@ -1900,13 +1938,8 @@ function AdminDashboard({ user }) {
       })
       .catch((err) => console.error('Không thể tải trạng thái chấm công:', err));
     loadActiveShifts().catch((err) => console.error('Lỗi tải trạng thái ca:', err));
+    if (user.role === 'ADMIN') void loadApprovals();
     if (user.role === 'ADMIN') {
-      fetch(`${apiUrl}/admin/attendance-requests?filter=all`, { headers: { Authorization: `Bearer ${token}` } })
-        .then((response) => response.json())
-        .then((approvalBody) => {
-        setApprovals(approvalBody.data || []);
-        })
-        .catch((err) => console.error('Lỗi tải danh sách duyệt:', err));
       loadDashboardStats();
     }
     return () => {
@@ -2131,7 +2164,11 @@ function AdminDashboard({ user }) {
         )}
       </div>
       {user.role === 'ADMIN' ? (
-        approvals.length ? (
+        approvalLoadError ? (
+          <div className="form-error" role="alert">
+            Không thể tải yêu cầu chấm công: {approvalLoadError}
+          </div>
+        ) : approvals.length ? (
           <>
             <div className="approval-list">
               {approvals.slice(0, 5).map((item) => (

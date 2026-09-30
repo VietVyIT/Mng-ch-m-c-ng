@@ -8,6 +8,7 @@ import {
   parseFaceEmbedding,
   validateEmbedding,
 } from '../utils/face.js';
+import { notifyAdministrators } from '../utils/notifications.js';
 
 const router = Router();
 
@@ -128,6 +129,7 @@ router.post('/verify', authenticate, async (request, response, next) => {
   }
 });
 router.post('/register/request', authenticate, async (request, response, next) => {
+  let connection;
   try {
     if (request.user.role !== 'USER') {
       return response.status(403).json({
@@ -145,22 +147,45 @@ router.post('/register/request', authenticate, async (request, response, next) =
       return response.status(400).json({ success: false, message: 'Ảnh khuôn mặt không hợp lệ hoặc vượt quá dung lượng cho phép.' });
     }
 
-    const [existing] = await pool.execute(
-      'SELECT id FROM face_re_registration_requests WHERE user_id = ? AND status = ? LIMIT 1',
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [users] = await connection.execute(
+      "SELECT id, full_name, student_code FROM users WHERE id = ? AND role = 'USER' FOR UPDATE",
+      [request.user.userId],
+    );
+    if (!users.length) {
+      await connection.rollback();
+      return response.status(404).json({ success: false, message: 'Không tìm thấy tài khoản thành viên.' });
+    }
+
+    const [existing] = await connection.execute(
+      'SELECT id FROM face_re_registration_requests WHERE user_id = ? AND status = ? LIMIT 1 FOR UPDATE',
       [request.user.userId, 'PENDING']
     );
     if (existing.length > 0) {
+      await connection.rollback();
       return response.status(409).json({ success: false, message: 'Bạn đã có một yêu cầu đăng ký lại khuôn mặt đang chờ admin duyệt.' });
     }
 
-    await pool.execute(
+    await connection.execute(
       'INSERT INTO face_re_registration_requests (user_id, new_face_embedding, new_face_image, status) VALUES (?, ?, ?, ?)',
       [request.user.userId, JSON.stringify(currentEmbedding), image || null, 'PENDING']
     );
+    const user = users[0];
+    const studentLabel = user.student_code ? ` (${user.student_code})` : '';
+    await notifyAdministrators(connection, {
+      type: 'FACE_REGISTRATION_REQUEST',
+      title: 'Yêu cầu đăng ký lại khuôn mặt',
+      message: `${user.full_name}${studentLabel} gửi yêu cầu cập nhật khuôn mặt, đang chờ duyệt.`,
+    });
 
+    await connection.commit();
     return response.json({ success: true, message: 'Đã gửi yêu cầu đăng ký lại khuôn mặt, vui lòng chờ admin duyệt.' });
   } catch (error) {
+    if (connection) await connection.rollback();
     return next(error);
+  } finally {
+    connection?.release();
   }
 });
 
