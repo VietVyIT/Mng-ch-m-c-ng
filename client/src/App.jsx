@@ -1482,8 +1482,15 @@ function UserPortal({ user }) {
 
     const isLate = Boolean(body.data?.is_late || body.data?.punctuality_status === 'LATE');
     setFaceModal(false);
+    setCheckInFeedback({
+      isLate,
+      message: body.message || (action === 'CHECK_IN'
+        ? 'Check-in thành công, đang chờ quản trị viên phê duyệt.'
+        : 'Check-out thành công, đang chờ quản trị viên phê duyệt.'),
+    });
     setToday((current) => mergeAttendanceRecords(current, {
       ...body.data,
+      ...(action === 'CHECK_OUT' ? { check_in: current?.check_in } : {}),
       attendance_date: getVietnamDateString(),
       status: 'PENDING',
       is_late: isLate,

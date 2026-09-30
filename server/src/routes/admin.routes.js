@@ -748,9 +748,9 @@ async function fetchAttendanceRequests(filter = 'all') {
               a.work_date, a.work_date AS attendance_date,
               a.check_in_time AS captured_at, a.check_in_time, a.check_out_time,
               IF(a.check_in_image IS NOT NULL
-                 AND COALESCE(
-                   STR_TO_DATE(REPLACE(LEFT(a.check_in_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-                   a.created_at
+                 AND STR_TO_DATE(
+                   REPLACE(LEFT(a.check_in_time, 19), 'T', ' '),
+                   '%Y-%m-%d %H:%i:%s'
                  ) >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
                  a.check_in_image, NULL) AS check_in_image,
               NULL AS check_out_image,
@@ -773,9 +773,9 @@ async function fetchAttendanceRequests(filter = 'all') {
               a.check_out_time AS captured_at, a.check_in_time, a.check_out_time,
               NULL AS check_in_image,
               IF(a.check_out_image IS NOT NULL
-                 AND COALESCE(
-                   STR_TO_DATE(REPLACE(LEFT(a.check_out_time, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-                   a.created_at
+                 AND STR_TO_DATE(
+                   REPLACE(LEFT(a.check_out_time, 19), 'T', ' '),
+                   '%Y-%m-%d %H:%i:%s'
                  ) >= DATE_SUB(NOW(), INTERVAL 20 HOUR),
                  a.check_out_image, NULL) AS check_out_image,
               a.check_out_status AS status, a.is_late,
@@ -854,9 +854,9 @@ async function serveApprovalImage(request, response, next) {
     const [rows] = await pool.execute(
       `SELECT ${eventType} AS image FROM attendance_logs
        WHERE id = ?
-         AND COALESCE(
-           STR_TO_DATE(REPLACE(LEFT(${timeColumn}, 19), 'T', ' '), '%Y-%m-%d %H:%i:%s'),
-           created_at
+         AND STR_TO_DATE(
+           REPLACE(LEFT(${timeColumn}, 19), 'T', ' '),
+           '%Y-%m-%d %H:%i:%s'
          ) >= DATE_SUB(NOW(), INTERVAL 20 HOUR)
        LIMIT 1`,
       [eventId],
