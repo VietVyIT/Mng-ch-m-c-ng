@@ -25,3 +25,6 @@ def process_file(filepath):
     print("Success")
 
 process_file('d:/Phát đồng phục/management/server/src/routes/admin.routes.js')
+
+
+# print"hello"
