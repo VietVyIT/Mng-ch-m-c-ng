@@ -990,7 +990,6 @@ function SalaryBankUserPage({ user }) {
     <div className="salary-bank-heading">
       <span className="section-label">CÁ NHÂN / NGÂN HÀNG NHẬN LƯƠNG</span>
       <h2>Cập nhật ngân hàng nhận lương</h2>
-      <p>Quản lý thông tin tài khoản để nhận lương. Bạn có thể cập nhật và chỉnh sửa bất cứ lúc nào.</p>
     </div>
     {success && <div className="salary-bank-alert success" role="status"><BadgeCheck size={18} />{success}</div>}
     {error && <div className="salary-bank-alert error" role="alert">{error}</div>}
@@ -4540,6 +4539,7 @@ function ShiftManagement() {
     try {
       const token = localStorage.getItem('attendance_token');
       const response = await fetch(`${apiUrl}/shifts`, {
+        cache: 'no-store',
         headers: { Authorization: `Bearer ${token}` }
       });
       const body = await response.json();
@@ -4588,8 +4588,11 @@ function ShiftManagement() {
       });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Lỗi khi cập nhật ca làm.');
+      if (!body.data) throw new Error('Máy chủ chưa xác nhận giờ ca đã lưu. Vui lòng tải lại trang và thử lại.');
       setEditingId(null);
-      await loadShifts();
+      setShifts((currentShifts) => currentShifts.map((shift) => (
+        shift.id === id ? body.data : shift
+      )));
       setSuccess(body.message || 'Cập nhật ca làm việc thành công.');
     } catch (err) {
       setError(err.message || 'Không thể cập nhật ca làm việc.');
@@ -4617,7 +4620,10 @@ function ShiftManagement() {
       });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật trạng thái ca.');
-      await loadShifts();
+      if (!body.data) throw new Error('Máy chủ chưa xác nhận trạng thái ca đã lưu. Vui lòng tải lại trang và thử lại.');
+      setShifts((currentShifts) => currentShifts.map((currentShift) => (
+        currentShift.id === shift.id ? body.data : currentShift
+      )));
       setSuccess(body.message || 'Đã cập nhật trạng thái ca làm việc.');
     } catch (requestError) {
       setError(requestError.message);

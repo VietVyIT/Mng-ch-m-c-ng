@@ -7,6 +7,7 @@ import { createNotification } from '../utils/notifications.js';
 import { parseFaceEmbedding } from '../utils/face.js';
 import { cleanupExpiredAttendancePhotos } from '../utils/attendance-photo-cleanup.js';
 import { createImportedUsername, ImportedUserIdentityError, resolveImportedUser } from '../utils/imported-user.js';
+import { updateShiftHandler } from './shifts.routes.js';
 
 const router = Router();
 router.use(authenticate, authorize('ADMIN'));
@@ -1262,35 +1263,18 @@ router.patch('/attendance-requests/approve-all', approveAllHandler);
 
 router.get('/shifts-config', async (request, response, next) => {
   try {
+    response.set('Cache-Control', 'no-store, max-age=0');
     const [rows] = await pool.execute('SELECT id, name, start_time, end_time, is_active FROM shifts ORDER BY FIELD(id, "MORNING", "AFTERNOON", "EVENING")');
     if (!rows || rows.length === 0) {
-      throw new Error('Empty shifts');
+      return response.status(404).json({ success: false, message: 'Không tìm thấy ca làm việc nào trong hệ thống.' });
     }
     return response.json({ success: true, data: rows });
-  } catch (error) {
-    return response.json({
-      success: true,
-      data: [
-        { id: 'MORNING', name: 'Ca Sáng', start_time: '07:30', end_time: '12:00', is_active: true },
-        { id: 'AFTERNOON', name: 'Ca Chiều', start_time: '13:30', end_time: '17:30', is_active: true },
-        { id: 'EVENING', name: 'Ca Tối', start_time: '18:00', end_time: '20:00', is_active: false }
-      ]
-    });
-  }
-});
-
-router.put('/shifts-config/:id', async (request, response, next) => {
-  try {
-    const { name, start_time, end_time, is_active } = request.body;
-    await pool.execute(
-      'UPDATE shifts SET name = ?, start_time = ?, end_time = ?, is_active = ? WHERE id = ?',
-      [name, start_time, end_time, is_active ? 1 : 0, request.params.id]
-    );
-    return response.json({ success: true, message: 'Cập nhật thành công' });
   } catch (error) {
     return next(error);
   }
 });
+
+router.put('/shifts-config/:id', updateShiftHandler);
 router.get('/face-requests', async (request, response, next) => {
   try {
     const status = request.query.status || 'PENDING';
