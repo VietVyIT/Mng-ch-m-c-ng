@@ -753,7 +753,7 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
     <div className="dashboard-app">
       {mobileMenu && <button className="sidebar-backdrop" aria-label="Đóng menu" onClick={() => setMobileMenu(false)} />}
       <aside className={mobileMenu ? 'sidebar sidebar-open' : 'sidebar'}>
-        <div className="sidebar-brand" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><span className="brand-square">A</span><div><strong>ATTENDLY</strong><small>Attendance system</small></div><button className="close-menu" aria-label="Đóng menu" onClick={(event) => { event.stopPropagation(); setMobileMenu(false); }}><X size={18} /></button></div>
+        <div className="sidebar-brand uth-sidebar-brand" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><img className="sidebar-uth-logo" src="/assets/uth-logo.png" alt="Trường Đại học Giao thông vận tải Thành phố Hồ Chí Minh" /><button className="close-menu" aria-label="Đóng menu" onClick={(event) => { event.stopPropagation(); setMobileMenu(false); }}><X size={18} /></button></div>
         <span className="sidebar-caption">WORKSPACE</span>
         <nav>{navItems.map(({ label, icon: Icon }) => <button key={label} className={`${page === label ? 'sidebar-link active' : 'sidebar-link'}${label.toLowerCase().includes('ngân hàng') ? ' salary-bank-nav' : ''}`} onClick={() => { onNavigate(label); setMobileMenu(false); }}><Icon size={18} />{label}</button>)}</nav>
         <div className="sidebar-bottom"><div className="account-card"><div className="user-avatar">{user.fullName?.charAt(0) || 'U'}</div><div><strong>{user.fullName || user.username}</strong><small>{user.role === 'ADMIN' ? 'Quản trị viên' : 'Người dùng'}</small></div></div><button className="sidebar-link logout-link" onClick={onLogout}><LogOut size={18} />Đăng xuất</button></div>
@@ -1644,27 +1644,40 @@ function getLastSevenDays(endDate = getVietnamDateString()) {
   });
 }
 
-function DashboardBarChart({ data }) {
-  const maximum = Math.max(1, ...data.map((day) => day.present + day.absent));
+function DashboardBarChart({ data, selectedDate, onDateSelect }) {
+  const maximum = Math.max(1, ...data.map((day) => day.onTime + day.late));
   return (
-    <div className="dashboard-bar-chart" role="img" aria-label="Biểu đồ chấm công 7 ngày gần nhất">
-      <div className="dashboard-chart-grid">
-        {[0, 1, 2, 3].map((line) => <span key={line} />)}
-      </div>
-      <div className="dashboard-chart-columns">
-        {data.map((day) => (
-          <div className="dashboard-chart-day" key={day.date}>
-            <div className="dashboard-chart-bars">
-              <span className="present" title={`Đi làm: ${day.present}`} style={{ height: `${Math.max(day.present ? 5 : 0, (day.present / maximum) * 100)}%` }} />
-              <span className="absent" title={`Nghỉ: ${day.absent}`} style={{ height: `${Math.max(day.absent ? 5 : 0, (day.absent / maximum) * 100)}%` }} />
-            </div>
-            <small>{day.label}</small>
-          </div>
-        ))}
+    <div className="dashboard-bar-chart" aria-label="Biểu đồ chấm công 7 ngày gần nhất">
+      <div className="dashboard-chart-plot">
+        <div className="dashboard-chart-grid">
+          {[0, 1, 2, 3].map((line) => <span key={line} />)}
+        </div>
+        <div className="dashboard-chart-columns">
+          {data.map((day) => {
+            const attended = day.onTime + day.late;
+            return (
+              <button
+                type="button"
+                className={`dashboard-chart-day ${selectedDate === day.date ? 'selected' : ''}`}
+                key={day.date}
+                onClick={() => onDateSelect(day.date)}
+                aria-label={`${day.fullLabel || day.label}: ${attended} lượt chấm công, ${day.onTime} đúng giờ, ${day.late} đi trễ`}
+                aria-pressed={selectedDate === day.date}
+              >
+                <span className="dashboard-chart-bar-total">{attended}</span>
+                <span className="dashboard-chart-bars" style={{ height: `${attended ? Math.max(5, (attended / maximum) * 82) : 0}%` }}>
+                  <span className="on-time" style={{ height: `${attended ? (day.onTime / attended) * 100 : 0}%` }} />
+                  <span className="late" style={{ height: `${attended ? (day.late / attended) * 100 : 0}%` }} />
+                </span>
+                <small>{day.label}</small>
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div className="dashboard-chart-legend">
-        <span><i className="present" />Đi làm</span>
-        <span><i className="absent" />Nghỉ</span>
+        <span><i className="on-time" />Đúng giờ</span>
+        <span><i className="late" />Đi trễ</span>
       </div>
     </div>
   );
@@ -2224,17 +2237,30 @@ function AdminDashboard({ user, onNavigate }) {
     year: 'numeric',
     timeZone: 'Asia/Ho_Chi_Minh',
   }).format(dashboardNow);
-  const weeklyData = getLastSevenDays().map((day) => {
+  const weeklyData = getLastSevenDays(selectedDate).map((day) => {
     const trend = dashboardStats?.trend?.find((item) => item.date === day.date);
-    const present = Number(trend?.onTime || 0) + Number(trend?.late || 0);
+    const onTime = Number(trend?.onTime || 0);
+    const late = Number(trend?.late || 0);
+    const present = onTime + late;
     return {
       ...day,
+      fullLabel: trend?.fullLabel,
+      onTime,
+      late,
       present,
       absent: Math.max(0, Number(dashboardStats?.totalStudents || 0) - present),
     };
   });
-  const weeklyPresent = weeklyData.reduce((sum, day) => sum + day.present, 0);
-  const weeklyTotal = Number(dashboardStats?.totalStudents || 0) * 7;
+  const selectedChartDay = weeklyData.find((day) => day.date === selectedDate);
+  const chartRangeEndLabel = new Intl.DateTimeFormat('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    timeZone: 'Asia/Ho_Chi_Minh',
+  }).format(new Date(`${selectedDate}T12:00:00+07:00`));
+  const weeklyAttendanceTotal = weeklyData.reduce((sum, day) => sum + day.present, 0);
+  const weeklyOnTime = weeklyData.reduce((sum, day) => sum + day.onTime, 0);
+  const weeklyLate = weeklyData.reduce((sum, day) => sum + day.late, 0);
 
   async function loadApprovals() {
     const token = localStorage.getItem('attendance_token');
@@ -2290,7 +2316,14 @@ function AdminDashboard({ user, onNavigate }) {
     try {
       const response = await fetch(`${apiUrl}/admin/dashboard-stats?range=${range}&date=${date}`, { headers: { Authorization: `Bearer ${token}` } });
       const body = await response.json();
-      if (body.success) setDashboardStats(body.data);
+      if (body.success) {
+        setDashboardStats((current) => ({
+          ...body.data,
+          todayCheckins: date === getVietnamDateString() || current?.todayCheckins == null
+            ? body.data.todayCheckins
+            : current.todayCheckins,
+        }));
+      }
     } catch (err) {
       console.error('Lỗi tải dashboard stats:', err);
     } finally {
@@ -2502,13 +2535,6 @@ function AdminDashboard({ user, onNavigate }) {
         badge={currentShift ? 'Đang mở' : null}
       />
       <DashboardStatCard
-        icon={CalendarCheck}
-        tone="green"
-        title="Trạng thái hôm nay"
-        value={statsLoading ? 'Đang tải...' : dashboardStats?.todayCheckins ? `${dashboardStats.todayCheckins} đã chấm` : 'Chưa chấm công'}
-        detail="Tài khoản Admin không bắt buộc điểm danh"
-      />
-      <DashboardStatCard
         icon={CalendarDays}
         tone="purple"
         title="Tổng ca trong ngày"
@@ -2522,19 +2548,35 @@ function AdminDashboard({ user, onNavigate }) {
         value="Hôm nay"
         detail={dashboardDateLabel}
       />
+      <DashboardStatCard
+        icon={CalendarCheck}
+        tone="green"
+        title="Chấm công hôm nay"
+        value={statsLoading ? '...' : `${dashboardStats?.todayCheckins || 0}`}
+        detail="thành viên đã chấm công"
+      />
     </section>
     <section className="dashboard-main-grid">
       <DashboardShiftsCard shifts={dashboardShifts} isAdmin />
       <section className="dashboard-content-card dashboard-weekly-chart-card">
-        <div className="dashboard-content-heading"><span className="dashboard-section-icon blue"><BarChart3 size={18} /></span><div><h2>Thống kê chấm công</h2><p>7 ngày gần nhất</p></div></div>
+        <div className="dashboard-content-heading"><span className="dashboard-section-icon blue"><BarChart3 size={18} /></span><div><h2>Thống kê chấm công</h2><p>7 ngày đến {chartRangeEndLabel} · Bấm vào cột để xem chi tiết</p></div></div>
         {statsLoading ? <div className="dashboard-chart-loading">Đang tải thống kê...</div> : (
-          <DashboardBarChart data={weeklyData} />
-        )}
-      </section>
-      <section className="dashboard-content-card dashboard-weekly-donut-card">
-        <div className="dashboard-content-heading"><span className="dashboard-section-icon purple"><CalendarCheck size={18} /></span><h2>Tỷ lệ chấm công tuần</h2></div>
-        {statsLoading ? <div className="dashboard-chart-loading">Đang tải thống kê...</div> : (
-          <DashboardAttendanceDonut present={weeklyPresent} total={weeklyTotal} />
+          <>
+            <div className="dashboard-week-summary" aria-label="Tổng kết chấm công 7 ngày gần nhất">
+              <div><span>Tổng lượt chấm công</span><strong>{weeklyAttendanceTotal}</strong></div>
+              <div><span>Đúng giờ</span><strong>{weeklyOnTime}</strong></div>
+              <div><span>Đi trễ</span><strong>{weeklyLate}</strong></div>
+            </div>
+            <DashboardBarChart data={weeklyData} selectedDate={selectedDate} onDateSelect={handleChartDateSelect} />
+            {selectedChartDay && (
+              <div className="dashboard-chart-summary" aria-live="polite">
+                <strong>{selectedChartDay.fullLabel || selectedChartDay.date}</strong>
+                <span><b>{selectedChartDay.present}</b> lượt chấm công</span>
+                <span><i className="on-time" />{selectedChartDay.onTime} đúng giờ</span>
+                <span><i className="late" />{selectedChartDay.late} đi trễ</span>
+              </div>
+            )}
+          </>
         )}
       </section>
     </section>
@@ -3313,8 +3355,18 @@ function ApprovalRow({ event, onPreview, onReview, onReject, processingId }) {
   );
 }
 
+function getApprovalShiftCode(request) {
+  const shift = String(request.shift || request.shift_code || request.shift_name || '').toLocaleLowerCase('vi');
+  if (shift.includes('morning') || shift.includes('sáng')) return 'MORNING';
+  if (shift.includes('afternoon') || shift.includes('chiều')) return 'AFTERNOON';
+  if (shift.includes('evening') || shift.includes('tối')) return 'EVENING';
+  return 'OTHER';
+}
+
 function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview, onPreview, actionLoading, processingId }) {
   const [activeTab, setActiveTab] = useState('all');
+  const [activeEventType, setActiveEventType] = useState('all');
+  const [activeShift, setActiveShift] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
@@ -3330,11 +3382,23 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
     late: requests.filter((r) => r.is_late || r.punctuality_status === 'LATE').length,
     ontime: requests.filter((r) => !r.is_late && r.punctuality_status !== 'LATE').length,
   };
+  const shiftCounts = ['MORNING', 'AFTERNOON', 'EVENING'].map((shiftCode) => ({
+    shiftCode,
+    checkIn: requests.filter((item) => getApprovalShiftCode(item) === shiftCode && item.event_type === 'CHECK_IN').length,
+    checkOut: requests.filter((item) => getApprovalShiftCode(item) === shiftCode && item.event_type === 'CHECK_OUT').length,
+  }));
+  const shiftLabels = {
+    MORNING: 'Ca sáng',
+    AFTERNOON: 'Ca chiều',
+    EVENING: 'Ca tối',
+  };
 
   const filteredRequests = requests.filter((item) => {
     const isLate = Boolean(item.is_late || item.punctuality_status === 'LATE');
     if (activeTab === 'late' && !isLate) return false;
     if (activeTab === 'ontime' && isLate) return false;
+    if (activeEventType !== 'all' && item.event_type !== activeEventType) return false;
+    if (activeShift !== 'all' && getApprovalShiftCode(item) !== activeShift) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       const matchName = (item.full_name || '').toLowerCase().includes(q);
@@ -3411,6 +3475,48 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
               <button onClick={() => setSearchQuery('')} aria-label="Xóa tìm kiếm">✕</button>
             )}
           </div>
+        </div>
+
+        <div className="approval-shift-summary" aria-label="Số lượng yêu cầu theo ca">
+          <button
+            type="button"
+            className={`approval-shift-card ${activeShift === 'all' ? 'active' : ''}`}
+            onClick={() => setActiveShift('all')}
+            aria-pressed={activeShift === 'all'}
+          >
+            <strong>Tất cả các ca</strong>
+            <span>{requests.length} yêu cầu</span>
+          </button>
+          {shiftCounts.map(({ shiftCode, checkIn, checkOut }) => (
+            <button
+              type="button"
+              key={shiftCode}
+              className={`approval-shift-card ${activeShift === shiftCode ? 'active' : ''}`}
+              onClick={() => setActiveShift(shiftCode)}
+              aria-pressed={activeShift === shiftCode}
+            >
+              <strong>{shiftLabels[shiftCode]}</strong>
+              <span><b>Check-in</b> {checkIn} <i>·</i> <b>Check-out</b> {checkOut}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="approval-event-filter" role="group" aria-label="Lọc loại yêu cầu">
+          {[
+            { value: 'all', label: 'Tất cả', count: requests.length },
+            { value: 'CHECK_IN', label: 'Check-in', count: requests.filter((item) => item.event_type === 'CHECK_IN').length },
+            { value: 'CHECK_OUT', label: 'Check-out', count: requests.filter((item) => item.event_type === 'CHECK_OUT').length },
+          ].map((filter) => (
+            <button
+              type="button"
+              key={filter.value}
+              className={`filter-tab-btn ${activeEventType === filter.value ? 'active' : ''}`}
+              onClick={() => setActiveEventType(filter.value)}
+              aria-pressed={activeEventType === filter.value}
+            >
+              {filter.label} <span className="tab-count">{filter.count}</span>
+            </button>
+          ))}
         </div>
 
         <div className="all-requests-table-wrap">
