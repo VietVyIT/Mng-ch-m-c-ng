@@ -54,6 +54,7 @@ FACE_MATCH_DISTANCE_THRESHOLD=0.6
 ```
 
 > Chỉ cần sửa `DB_PASSWORD` là chạy được. Các giá trị khác giữ mặc định.
+> Để bật chức năng ngân hàng nhận lương, hãy cấu hình `BANK_ACCOUNT_ENCRYPTION_KEY` bằng chuỗi hex ngẫu nhiên 64 ký tự. Không đổi khóa sau khi đã lưu tài khoản ngân hàng, nếu không dữ liệu cũ không thể giải mã.
 
 ### Bước 4: Chạy
 
@@ -95,6 +96,24 @@ docker compose up -d --build
 Để dừng hệ thống, bạn có thể chạy `npm run docker:down` hoặc `docker compose down`.
 
 *(Tài liệu chi tiết hơn về cách deploy lên VPS bằng Docker nằm ở file `deployment_guide.md`)*
+
+### Thông tin ngân hàng nhận lương
+
+Backend tạo hai bảng mới `user_salary_bank_accounts` và `user_salary_bank_account_audit` trong quá trình khởi động; không sửa bảng `users` hoặc các bảng chấm công. Số tài khoản được mã hóa AES-256-GCM bằng `BANK_ACCOUNT_ENCRYPTION_KEY`; tạo khóa bằng:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+Giữ khóa ngoài Git và backup bảo mật cùng database. Nếu mất/đổi khóa, số tài khoản đã lưu không thể giải mã. Với Docker, đặt khóa trong `.env` (hoặc `.env.docker` khi chạy lệnh `--env-file .env.docker`).
+
+Để áp dụng thủ công trên database hiện hữu, backup database trước:
+
+```bash
+mysqldump --single-transaction --routines --triggers -u <db_user> -p attendance_system > attendance_system_pre_salary_bank.sql
+```
+
+Sau đó chạy `database/migrations/012_salary_bank_accounts.sql`. Rollback ứng dụng bằng phiên bản trước không yêu cầu xóa bảng mới; giữ lại các bảng và dữ liệu để tránh mất hồ sơ. Chỉ xóa hai bảng mới nếu chủ hệ thống quyết định loại bỏ hoàn toàn tính năng và đã lưu trữ dữ liệu cần thiết.
 
 ---
 

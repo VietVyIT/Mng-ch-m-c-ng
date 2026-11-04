@@ -19,11 +19,40 @@ CREATE TABLE IF NOT EXISTS users (
   face_registered BOOLEAN NOT NULL DEFAULT FALSE,
   must_change_password BOOLEAN NOT NULL DEFAULT TRUE,
   total_work_days DECIMAL(8,2) NOT NULL DEFAULT 0,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_username (username),
   UNIQUE KEY uq_users_student_code (student_code)
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS user_salary_bank_accounts (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  account_holder_name VARCHAR(150) NOT NULL,
+  student_code VARCHAR(30) NOT NULL,
+  bank_name VARCHAR(120) NOT NULL,
+  account_number_encrypted TEXT NOT NULL,
+  bank_branch VARCHAR(150) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_salary_bank_user_id (user_id),
+  CONSTRAINT fk_salary_bank_user FOREIGN KEY (user_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE CASCADE
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS user_salary_bank_account_audit (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id BIGINT UNSIGNED NOT NULL,
+  actor_user_id BIGINT UNSIGNED NULL,
+  action ENUM('CREATE', 'UPDATE') NOT NULL,
+  changed_fields JSON NOT NULL,
+  changed_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  PRIMARY KEY (id),
+  KEY idx_salary_bank_audit_user_time (user_id, changed_at),
+  CONSTRAINT fk_salary_bank_audit_user FOREIGN KEY (user_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE CASCADE,
+  CONSTRAINT fk_salary_bank_audit_actor FOREIGN KEY (actor_user_id) REFERENCES users (id)
+    ON UPDATE CASCADE ON DELETE SET NULL
 ) ENGINE=InnoDB;
 CREATE TABLE IF NOT EXISTS attendance (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

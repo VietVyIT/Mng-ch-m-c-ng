@@ -90,22 +90,23 @@ router.post('/attendance/import-excel', async (request, response, next) => {
         throw new ImportedUserIdentityError('MISSING_USER_NAME', 'Mỗi thành viên import phải có họ và tên.');
       }
       if (!mssv) noStudentCodeUsers += 1;
-      if (!mssv && !email) {
-        throw new ImportedUserIdentityError(
-          'MISSING_STABLE_IDENTIFIER',
-          `Không thể xác định duy nhất tài khoản "${name}": cần mã sinh viên hoặc email.`,
-        );
-      }
+      const nameOnlyUsername = !mssv && !email ? createImportedUsername(name, '', '') : '';
       const [existing] = await connection.execute(
         `SELECT id, role, student_code, email,
                 (? <> '' AND student_code = ?) AS student_code_match,
                 (? <> '' AND LOWER(email) = ?) AS email_match,
-                (username = ?) AS username_match
+                (username = ? OR (? <> '' AND username = ?)) AS username_match
          FROM users
          WHERE ((? <> '' AND student_code = ?)
              OR (? <> '' AND LOWER(email) = LOWER(?))
-             OR username = ?)`,
-        [mssv, mssv, email, email, name.slice(0, 100), mssv, mssv, email, email, name.slice(0, 100)],
+             OR username = ?
+             OR (? <> '' AND username = ?))`,
+        [
+          mssv, mssv, email, email,
+          name.slice(0, 100), nameOnlyUsername, nameOnlyUsername,
+          mssv, mssv, email, email,
+          name.slice(0, 100), nameOnlyUsername, nameOnlyUsername,
+        ],
       );
       const matchedUser = resolveImportedUser(existing, mssv, email);
       let userId = matchedUser?.id;
@@ -119,7 +120,7 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       } else {
         let username = name.slice(0, 100);
         const usernameCollision = existing.some((candidate) => Boolean(candidate.username_match));
-        if (usernameCollision || name.length > 100) {
+        if (usernameCollision || name.length > 100 || (!mssv && !email)) {
           for (let attempt = 0; ; attempt += 1) {
             username = createImportedUsername(name, mssv, email, attempt);
             const [usernameMatches] = await connection.execute(

@@ -73,10 +73,85 @@ test('a username collision on an admin account is never treated as a user match'
   assert.equal(resolveImportedUser([admin], 'SV002', 'minh2@example.com'), null);
 });
 
-test('users cannot be matched or created from a name alone', () => {
+test('a name-only import updates an existing username account without a student code', () => {
+  const existingUser = {
+    id: 21,
+    role: 'USER',
+    student_code: null,
+    username: 'Phạm Gia Minh',
+    username_match: 1,
+  };
+
+  assert.equal(resolveImportedUser([existingUser], '', ''), existingUser);
+});
+
+test('a name-only import does not update an account with a different stored student code', () => {
+  const existingUser = {
+    id: 22,
+    role: 'USER',
+    student_code: 'SV001',
+    username: 'Phạm Gia Minh',
+    username_match: 1,
+  };
+
+  assert.equal(resolveImportedUser([existingUser], '', ''), null);
+});
+
+test('a name-only account gets a deterministic username when that name belongs to another account', () => {
+  const existingStudent = {
+    id: 23,
+    role: 'USER',
+    student_code: 'SV001',
+    username: 'Phạm Gia Minh',
+    username_match: 1,
+  };
+  const nameOnlyUsername = createImportedUsername('Phạm Gia Minh', '', '');
+  const resolved = resolveImportedUser([existingStudent], '', '');
+  const nameOnlyUser = {
+    id: 24,
+    role: 'USER',
+    student_code: null,
+    username: nameOnlyUsername,
+    username_match: 1,
+  };
+
+  assert.equal(resolved, null);
+  assert.notEqual(nameOnlyUsername, existingStudent.username);
+  assert.equal(nameOnlyUsername, createImportedUsername('Phạm Gia Minh', '', ''));
+  assert.equal(resolveImportedUser([existingStudent, nameOnlyUser], '', ''), nameOnlyUser);
+});
+
+test('a username collision on an admin account is not treated as a name-only user match', () => {
+  const admin = {
+    id: 1,
+    role: 'ADMIN',
+    student_code: null,
+    username: 'Phạm Gia Minh',
+    username_match: 1,
+  };
+
+  assert.equal(resolveImportedUser([admin], '', ''), null);
+});
+
+test('new name-only accounts use a stable username', () => {
+  const firstUsername = createImportedUsername('Phạm Gia Minh', '', '');
+  const secondUsername = createImportedUsername('Phạm Gia Minh', '', '');
+
+  assert.equal(firstUsername, secondUsername);
+  assert.ok(firstUsername.length <= 100);
+});
+
+test('users with no stable identifiers can be created as name-only imports', () => {
+  assert.equal(resolveImportedUser([], '', ''), null);
+});
+
+test('multiple name-only accounts with the same username are rejected', () => {
   assert.throws(
-    () => resolveImportedUser([], '', ''),
+    () => resolveImportedUser([
+      { id: 1, role: 'USER', student_code: null, username_match: 1 },
+      { id: 2, role: 'USER', student_code: null, username_match: 1 },
+    ], '', ''),
     (error) => error instanceof ImportedUserIdentityError
-      && error.code === 'MISSING_STABLE_IDENTIFIER',
+      && error.code === 'AMBIGUOUS_USER_IDENTITY',
   );
 });

@@ -12,6 +12,7 @@ export class ImportedUserIdentityError extends Error {
 export function resolveImportedUser(candidates, studentCode, email) {
   const codeMatches = candidates.filter((candidate) => Boolean(candidate.student_code_match));
   const emailMatches = candidates.filter((candidate) => Boolean(candidate.email_match));
+  const usernameMatches = candidates.filter((candidate) => Boolean(candidate.username_match));
 
   if (codeMatches.length > 1 || emailMatches.length > 1) {
     throw new ImportedUserIdentityError(
@@ -52,10 +53,17 @@ export function resolveImportedUser(candidates, studentCode, email) {
   }
 
   if (!studentCode && !email) {
-    throw new ImportedUserIdentityError(
-      'MISSING_STABLE_IDENTIFIER',
-      'Cần có mã sinh viên hoặc email để xác định tài khoản an toàn.',
-    );
+    const nameOnlyMatches = usernameMatches.filter((candidate) => (
+      candidate.role === 'USER' && !candidate.student_code?.trim()
+    ));
+    if (nameOnlyMatches.length > 1) {
+      throw new ImportedUserIdentityError(
+        'AMBIGUOUS_USER_IDENTITY',
+        'Có nhiều tài khoản trùng tên không có mã sinh viên; không thể xác định duy nhất tài khoản.',
+        409,
+      );
+    }
+    return nameOnlyMatches[0] || null;
   }
 
   return null;
@@ -64,7 +72,9 @@ export function resolveImportedUser(candidates, studentCode, email) {
 export function createImportedUsername(name, studentCode, email, attempt = 0) {
   const identifier = studentCode
     ? `student:${studentCode.trim().toLowerCase()}`
-    : `email:${email.trim().toLowerCase()}`;
+    : email
+      ? `email:${email.trim().toLowerCase()}`
+      : `name:${name.trim().toLowerCase()}`;
   const hashInput = attempt ? `${identifier}:${attempt}` : identifier;
   const suffix = createHash('sha256').update(hashInput).digest('hex').slice(0, 12);
   const prefix = name.slice(0, 87).trimEnd();

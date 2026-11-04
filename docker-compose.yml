@@ -40,6 +40,7 @@ services:
       - DB_PASSWORD=${DB_PASSWORD:-Phanvietvy107@}
       - DB_NAME=attendance_system
       - JWT_SECRET=${JWT_SECRET:-random-secret-for-production-123}
+      - BANK_ACCOUNT_ENCRYPTION_KEY=${BANK_ACCOUNT_ENCRYPTION_KEY:-}
       - CLIENT_URL=http://localhost
       - TZ=Asia/Ho_Chi_Minh
     expose:

@@ -13,6 +13,7 @@ export const env = {
   port: Number(process.env.PORT || 5000),
   clientUrl: process.env.CLIENT_URL || '', // Không bắt buộc gắt gao nữa
   jwtSecret: required('JWT_SECRET'),
+  bankAccountEncryptionKey: process.env.BANK_ACCOUNT_ENCRYPTION_KEY || '',
   faceMatchDistanceThreshold: Number(process.env.FACE_MATCH_DISTANCE_THRESHOLD || 0.6),
   database: {
     host: required('DB_HOST', 'MYSQLHOST'),

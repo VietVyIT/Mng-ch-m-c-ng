@@ -13,6 +13,7 @@ import attendanceRoutes from './routes/attendance.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import shiftsRoutes from './routes/shifts.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import { salaryBankAdminRoutes, salaryBankUserRoutes } from './routes/salary-bank.routes.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,6 +72,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/face', faceRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/me/salary-bank', salaryBankUserRoutes);
+app.use('/api/admin/salary-bank', salaryBankAdminRoutes);
 app.use('/api/shifts', shiftsRoutes);
 app.use('/api/notifications', notificationRoutes);
 
