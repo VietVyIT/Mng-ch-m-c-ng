@@ -1,42 +1,105 @@
-# ATTENDLY – Hệ Thống Quản Lý Chấm Công
+# ATTENDLY
 
-Hệ thống tra cứu & quản lý ngày công sinh viên với nhận diện khuôn mặt.
+ATTENDLY là ứng dụng web quản lý chấm công sinh viên. Sinh viên có thể ghi nhận giờ vào/ra bằng camera và nhận diện khuôn mặt, theo dõi lịch sử làm việc và cập nhật hồ sơ. Quản trị viên quản lý tài khoản, ca làm, yêu cầu chấm công, dữ liệu import và thông tin ngân hàng nhận lương.
 
-**Công nghệ:** React 19 · Vite · Express · MySQL 8.0 · JWT · Face-API
+Tài liệu này hướng dẫn cài đặt từ mã nguồn, chạy ở môi trường phát triển và thử ứng dụng bằng Docker. Các lệnh được chạy từ thư mục gốc của repository.
 
----
+## Mục lục
 
-## Cài đặt
+- [Tính năng](#tính-năng)
+- [Công nghệ](#công-nghệ)
+- [Yêu cầu](#yêu-cầu)
+- [Chạy local](#chạy-local)
+- [Chạy bằng Docker](#chạy-bằng-docker)
+- [Cấu trúc dự án](#cấu-trúc-dự-án)
+- [Cơ sở dữ liệu và migrations](#cơ-sở-dữ-liệu-và-migrations)
+- [Build và kiểm tra](#build-và-kiểm-tra)
+- [Bảo mật và vận hành](#bảo-mật-và-vận-hành)
+- [Xử lý sự cố](#xử-lý-sự-cố)
 
-### Bước 1: Cài đặt dependencies
+## Tính năng
+
+### Sinh viên
+
+- Đăng nhập, đăng ký và khôi phục mật khẩu; các luồng xác thực qua email cần cấu hình SMTP.
+- Đăng ký khuôn mặt, gửi yêu cầu đăng ký lại và xem trạng thái yêu cầu.
+- Chấm công vào/ra bằng camera, xem trạng thái duyệt và lịch sử chấm công cá nhân.
+- Theo dõi tổng quan ngày công, ca làm và thông báo.
+- Cập nhật hồ sơ, đổi tên đăng nhập và mật khẩu.
+- Khai báo thông tin ngân hàng nhận lương.
+
+### Quản trị viên
+
+- Xem dashboard, quản lý tài khoản sinh viên và xử lý yêu cầu liên quan đến khuôn mặt.
+- Duyệt hoặc từ chối yêu cầu chấm công; quản lý lịch sử và dữ liệu chấm công.
+- Cấu hình ca làm và ngày/ca được mở.
+- Import danh sách sinh viên và dữ liệu chấm công từ Excel. Dữ liệu chấm công import dùng khóa người dùng, ngày và ca để cập nhật bản ghi khi import lại thay vì tạo thêm bản ghi trùng.
+- Xem thông tin ngân hàng nhận lương và lịch sử thay đổi.
+- Gửi thông báo và quản lý hồ sơ cá nhân.
+
+## Công nghệ
+
+- **Frontend:** React 19, Vite, face-api.js, Chart.js.
+- **Backend:** Node.js 20+, Express 4, JWT, bcrypt, ExcelJS, Nodemailer.
+- **Cơ sở dữ liệu:** MySQL 8, InnoDB, `mysql2`.
+- **Triển khai:** Docker Compose, Nginx.
+
+## Yêu cầu
+
+Để chạy local không dùng Docker:
+
+- Node.js 20 trở lên và npm.
+- MySQL 8 đang chạy, có quyền tạo database.
+- Trình duyệt hiện đại có quyền truy cập camera. Camera yêu cầu secure context: dùng `localhost` khi phát triển local; khi truy cập từ máy khác cần HTTPS.
+
+Để chạy bằng Docker, cần Docker Engine hoặc Docker Desktop cùng Docker Compose. Nếu gọi Docker Compose trực tiếp thì không cần cài Node.js/MySQL trên máy host; lệnh tắt `npm run docker:up` cần Node.js/npm.
+
+## Chạy local
+
+### 1. Lấy mã nguồn và cài dependencies
 
 ```bash
-npm install
+git clone <URL-repository>
+cd <thu-muc-repository>
+npm ci
 ```
 
-### Bước 2: Tạo database
+### 2. Tạo database mới
 
-Mở **MySQL Workbench**, mở file `database/schema.sql` rồi bấm **Execute**.
+Tạo schema ban đầu và dữ liệu mẫu bằng `database/schema.sql`. Cách dùng MySQL Workbench:
 
-Hoặc chạy bằng terminal:
+1. Mở `database/schema.sql`.
+2. Kết nối MySQL local và thực thi toàn bộ script.
+
+Trên Windows, có thể chạy từ PowerShell tại thư mục dự án:
 
 ```powershell
-# Thêm MySQL vào PATH (chỉ cần lần đầu trong phiên terminal)
-$env:PATH += ";C:\Program Files\MySQL\MySQL Server 8.0\bin"
-
-# Chạy schema
-Get-Content database\schema.sql | mysql -u root -p
+cmd.exe /c "mysql -u root -p < database\schema.sql"
 ```
 
-File này tạo database `attendance_system`, tất cả bảng cần thiết và tài khoản admin mẫu.
+Trên macOS/Linux:
 
-### Bước 3: Cấu hình môi trường
+```bash
+mysql -u root -p < database/schema.sql
+```
+
+Script tạo database `attendance_system`, các bảng cần thiết, các ca mặc định và tài khoản quản trị mẫu. Với database mới được tạo riêng bằng script này, thông tin đăng nhập mẫu là `admin` / `admin123`. Hãy đổi mật khẩu ngay sau lần đăng nhập đầu tiên. Không chạy file schema này thay cho migrations trên database production hoặc database đã có dữ liệu.
+
+### 3. Cấu hình backend
+
+Tạo file môi trường local:
 
 ```powershell
 Copy-Item server\.env.example server\.env
 ```
 
-Mở file `server/.env` và sửa lại thông tin MySQL:
+macOS/Linux:
+
+```bash
+cp server/.env.example server/.env
+```
+
+Mở `server/.env`, đặt thông tin MySQL thực tế và thay các giá trị secret mẫu:
 
 ```env
 NODE_ENV=development
@@ -47,153 +110,212 @@ DB_HOST=localhost
 DB_PORT=3306
 DB_NAME=attendance_system
 DB_USER=root
-DB_PASSWORD=mật_khẩu_mysql_của_bạn
+DB_PASSWORD=<mat-khau-MySQL-local>
 
-JWT_SECRET=replace-with-a-random-secret-at-least-32-characters
+JWT_SECRET=<chuoi-ngau-nhien-it-nhat-32-ky-tu>
 FACE_MATCH_DISTANCE_THRESHOLD=0.6
+BANK_ACCOUNT_ENCRYPTION_KEY=<64-ky-tu-hex>
 ```
 
-> Chỉ cần sửa `DB_PASSWORD` là chạy được. Các giá trị khác giữ mặc định.
-> Để bật chức năng ngân hàng nhận lương, hãy cấu hình `BANK_ACCOUNT_ENCRYPTION_KEY` bằng chuỗi hex ngẫu nhiên 64 ký tự. Không đổi khóa sau khi đã lưu tài khoản ngân hàng, nếu không dữ liệu cũ không thể giải mã.
-
-### Bước 4: Chạy
+Tạo secret ngẫu nhiên bằng Node.js:
 
 ```bash
-npm run dev
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-Mở trình duyệt:
-
-- **Frontend:** http://localhost:5173
-- **Backend API:** http://localhost:5000/api
-- **Health check:** http://localhost:5000/api/health/database — trả `success: true` là OK
-
----
-
-## Triển khai bằng Docker (Dành cho Production / Test nhanh)
-
-Nếu bạn đã có sẵn Docker Desktop (trên Windows/Mac) hoặc Docker Engine (trên Linux VPS), bạn có thể dựng toàn bộ hệ thống lên chỉ bằng 1 dòng lệnh mà không cần cài đặt Node.js hay MySQL rườm rà.
-
-### Bước 1: Chuẩn bị file biến môi trường
-
-```bash
-# Copy file môi trường (Nạp thông tin thật nếu deploy lên VPS)
-cp .env.docker.example .env.docker
-```
-*(Nếu bạn chạy ở máy tính local để test, nhớ tắt các phần mềm đang chiếm cổng 3306 như XAMPP hoặc sửa `3306:3306` thành `3307:3306` trong `docker-compose.yml` nhé).*
-
-### Bước 2: Khởi chạy
-
-Bạn có thể chạy lệnh này ở thư mục gốc:
-
-```bash
-# Sử dụng script npm đã cấu hình sẵn
-npm run docker:up
-
-# Hoặc dùng lệnh trực tiếp của Docker Compose
-docker compose up -d --build
-```
-Để dừng hệ thống, bạn có thể chạy `npm run docker:down` hoặc `docker compose down`.
-
-*(Tài liệu chi tiết hơn về cách deploy lên VPS bằng Docker nằm ở file `deployment_guide.md`)*
-
-### Thông tin ngân hàng nhận lương
-
-Backend tạo hai bảng mới `user_salary_bank_accounts` và `user_salary_bank_account_audit` trong quá trình khởi động; không sửa bảng `users` hoặc các bảng chấm công. Số tài khoản được mã hóa AES-256-GCM bằng `BANK_ACCOUNT_ENCRYPTION_KEY`; tạo khóa bằng:
+Để tạo khóa mã hóa ngân hàng riêng (32 byte, biểu diễn bằng 64 ký tự hex):
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Giữ khóa ngoài Git và backup bảo mật cùng database. Nếu mất/đổi khóa, số tài khoản đã lưu không thể giải mã. Với Docker, đặt khóa trong `.env` (hoặc `.env.docker` khi chạy lệnh `--env-file .env.docker`).
+`BANK_ACCOUNT_ENCRYPTION_KEY` cần có khi sử dụng tính năng ngân hàng nhận lương. Hãy lưu khóa an toàn và giữ nguyên khóa trong suốt vòng đời dữ liệu đã mã hóa; mất hoặc thay khóa sẽ khiến dữ liệu cũ không thể giải mã.
 
-Để áp dụng thủ công trên database hiện hữu, backup database trước:
+SMTP trong `server/.env.example` là tùy chọn đối với việc khởi chạy ứng dụng, nhưng cần thiết cho các luồng gửi OTP email như đăng ký và khôi phục mật khẩu. Không đưa thông tin SMTP hoặc bất kỳ secret thật nào vào Git.
 
-```bash
-mysqldump --single-transaction --routines --triggers -u <db_user> -p attendance_system > attendance_system_pre_salary_bank.sql
-```
-
-Sau đó chạy `database/migrations/012_salary_bank_accounts.sql`. Rollback ứng dụng bằng phiên bản trước không yêu cầu xóa bảng mới; giữ lại các bảng và dữ liệu để tránh mất hồ sơ. Chỉ xóa hai bảng mới nếu chủ hệ thống quyết định loại bỏ hoàn toàn tính năng và đã lưu trữ dữ liệu cần thiết.
-
----
-
-## Tài khoản thử nghiệm
-
-| Vai trò | Username | Password | Ghi chú |
-|---------|----------|----------|---------|
-| Admin | `admin` | `admin123` | Dashboard, duyệt/xoá công, cấu hình ca |
-| User 1 | `user1` | `user123` | Đã có 5 ngày công được duyệt |
-| User 2 | `user2` | `user123` | Tài khoản trống, thử check-in đầu tiên |
-
-**Test nhanh:**
-
-1. Đăng nhập `user2` / `user123` → check-in bằng khuôn mặt
-2. Đăng nhập `admin` / `admin123` → duyệt yêu cầu
-3. Đăng nhập lại `user2` → xem kết quả
-
-> Tài khoản mẫu chỉ dùng cho development.
-
----
-
-## Ca làm việc
-
-| Ca | Thời gian | Ghi chú |
-|----|-----------|---------|
-| Sáng | 07:30 – 12:00 | Mặc định bật |
-| Chiều | 13:30 – 17:30 | Mặc định bật |
-| Tối | 17:30 – 20:00 | Admin bật/tắt theo ngày |
-
----
-
-## Import Excel
-
-Admin → Dashboard → **Nhập dữ liệu Excel** → tải file `.xlsx` / `.xls`.
-
-File cần có: dòng ngày `D/M` hoặc `D/M/YYYY`, dòng dưới ghi ca (`Sáng`, `Chiều`, `Tối`), cột `Họ & Tên` + `MSSV` + `Total`, ô `x`/`X` = đã đi làm.
-
-Thành viên chưa có tài khoản sẽ được tạo tự động (mật khẩu tạm `user123@`, bắt đổi lần đầu).
-
----
-
-## Nạp danh sách thành viên
-
-File `server/seed/members.json` nằm local (đã gitignore):
+### 4. Khởi chạy ứng dụng
 
 ```bash
-npm run seed:members --workspace server
+npm run dev
 ```
 
----
+Các địa chỉ mặc định:
 
-## Cấu trúc thư mục
+- Frontend: <http://localhost:5173>
+- Backend: <http://localhost:5000>
+- API health: <http://localhost:5000/api/health>
+- Kiểm tra kết nối database: <http://localhost:5000/api/health/database>
 
+Frontend ở chế độ phát triển tự gọi API tại cổng `5000` trên cùng hostname. Nếu đổi cổng hoặc tách frontend/backend, cấu hình `VITE_API_URL` cho frontend thành URL API đầy đủ, ví dụ `http://localhost:5000/api`.
+
+### Chạy production build trên một máy
+
+Sau khi đã cấu hình `server/.env` và database:
+
+```bash
+npm run build
 ```
+
+Đặt `NODE_ENV=production` trong `server/.env`, sau đó chạy:
+
+```bash
+npm start
+```
+
+Express phục vụ frontend đã build và API tại cổng được đặt bởi `PORT` (mặc định `5000`). Khi chạy ngoài môi trường local, cần đặt HTTPS ở reverse proxy và cấu hình `CLIENT_URL` theo origin của frontend.
+
+## Chạy bằng Docker
+
+Docker Compose khởi chạy MySQL, backend phục vụ frontend đã build, và Nginx. Trước khi chạy:
+
+1. Tạo file cấu hình từ template.
+2. Thay password database, JWT secret và khóa mã hóa bằng giá trị mạnh, riêng cho môi trường này.
+3. Nginx hiện cấu hình TLS với hai file `nginx/ssl/self-signed.crt` và `nginx/ssl/self-signed.key`. Cần cung cấp các file đó để Nginx khởi động; với môi trường public, dùng chứng chỉ hợp lệ thay vì chứng chỉ self-signed. Có thể tạo chứng chỉ thử nghiệm nếu máy đã cài OpenSSL:
+
+   ```powershell
+   New-Item -ItemType Directory -Force nginx\ssl
+   openssl req -x509 -nodes -days 365 -newkey rsa:2048 `
+     -keyout nginx/ssl/self-signed.key `
+     -out nginx/ssl/self-signed.crt `
+     -subj "/CN=localhost"
+   ```
+
+   Lệnh tạo chứng chỉ này chỉ phục vụ local/test, không dùng cho website public.
+4. Kiểm tra `database/seed.sql` trước khi tạo volume database mới. Compose gắn file dump này vào thư mục khởi tạo của MySQL, và MySQL chỉ chạy các script khởi tạo khi volume còn trống. Đây là dump dữ liệu, không phải chỉ schema sạch; chỉ dùng dữ liệu development đã được duyệt và tuyệt đối không dùng dump chứa dữ liệu cá nhân hoặc production để chia sẻ/triển khai.
+
+Tạo file `.env.docker`:
+
+```powershell
+Copy-Item .env.docker.example .env.docker
+```
+
+macOS/Linux:
+
+```bash
+cp .env.docker.example .env.docker
+```
+
+Sau khi chỉnh `.env.docker` và chuẩn bị chứng chỉ Nginx, chạy:
+
+```bash
+npm run docker:up
+```
+
+Hoặc dùng Docker Compose trực tiếp:
+
+```bash
+docker compose --env-file .env.docker up -d --build
+```
+
+Truy cập <http://localhost:3000>. HTTPS được publish ở cổng `443`; trình duyệt sẽ cảnh báo nếu dùng chứng chỉ self-signed.
+
+Các cổng host trong `docker-compose.yml`:
+
+| Dịch vụ | Cổng host | Ghi chú |
+|---|---:|---|
+| Web qua Nginx | `3000` | HTTP |
+| Nginx TLS | `443` | Cần chứng chỉ trong `nginx/ssl` |
+| MySQL | `3307` | Chuyển tiếp tới cổng `3306` trong container |
+
+Dừng các container nhưng giữ nguyên dữ liệu:
+
+```bash
+npm run docker:down
+```
+
+hoặc:
+
+```bash
+docker compose --env-file .env.docker down
+```
+
+Database được lưu trong named volume `mysql_data`. Không thêm `-v` vào lệnh `docker compose down` nếu muốn giữ dữ liệu. Xóa volume sẽ xóa database local không thể khôi phục nếu chưa có backup. Thay đổi `database/seed.sql` cũng không tự nạp lại vào volume đã được khởi tạo.
+
+## Cấu trúc dự án
+
+```text
+.
+├── client/                 # Ứng dụng React/Vite
+│   ├── src/                # Giao diện và luồng nghiệp vụ
+│   └── public/             # Tài nguyên frontend
+├── server/
+│   ├── src/
+│   │   ├── config/         # Cấu hình môi trường và MySQL
+│   │   ├── middlewares/    # Xác thực và xử lý lỗi
+│   │   ├── routes/         # API auth, attendance, admin, ...
+│   │   └── utils/          # Hàm dùng chung
+│   └── public/models/      # Model nhận diện khuôn mặt
+├── database/
+│   ├── schema.sql          # Schema đầy đủ cho database mới
+│   ├── migrations/         # Thay đổi schema theo phiên bản
+│   └── seed.sql            # Dump được Docker Compose dùng khi tạo volume mới
+├── nginx/
+│   ├── nginx.conf
+│   └── ssl/                # Chứng chỉ TLS cần được cung cấp riêng
 ├── Dockerfile
 ├── docker-compose.yml
-├── package.json               # Root workspace
-├── client/                    # React + Vite
-│   └── src/
-│       ├── App.jsx
-│       ├── main.jsx
-│       └── styles.css
-├── server/                    # Express API
-│   └── src/
-│       ├── server.js          # Entry point
-│       ├── app.js             # Express config
-│       ├── config/            # env.js, database.js
-│       ├── routes/            # API routes
-│       ├── middlewares/
-│       └── utils/
-└── database/
-    ├── schema.sql
-    └── migrations/
+└── package.json            # npm workspaces và lệnh dùng chung
 ```
+
+## Cơ sở dữ liệu và migrations
+
+- `database/schema.sql` là điểm khởi đầu cho **database local mới**, bao gồm các bảng chính và dữ liệu mẫu.
+- `database/migrations/` chứa các thay đổi theo phiên bản cho database đã tồn tại. Xem nội dung từng migration và kiểm tra trạng thái schema trước khi áp dụng; không chạy lại một migration đã áp dụng.
+- Server có một số bước tạo/bảo trì bảng khi khởi động, nhưng đây không thay thế quy trình backup và migrations có kiểm soát cho môi trường hiện hữu.
+- `database/seed.sql` là dump được Docker Compose nạp khi MySQL khởi tạo volume trống. Không dùng file dump này để cập nhật database hiện hữu.
+- Sao lưu database trước khi thay đổi schema. Với tính năng ngân hàng, sao lưu an toàn cả database lẫn khóa `BANK_ACCOUNT_ENCRYPTION_KEY`.
+
+## Build và kiểm tra
+
+Build frontend:
+
+```bash
+npm run build
+```
+
+Khởi động backend:
+
+```bash
+npm start
+```
+
+Hiện tại workspace có script build cho frontend nhưng chưa khai báo script `test` ở thư mục gốc, `client` hoặc `server`.
+
+## Bảo mật và vận hành
+
+- Không commit `server/.env`, `.env.docker`, thông tin đăng nhập, khóa mã hóa, chứng chỉ riêng hoặc dữ liệu backup.
+- Không sử dụng giá trị mẫu trong file môi trường hay cấu hình Docker ở môi trường public. Tự đặt `DB_PASSWORD`, `JWT_SECRET` ngẫu nhiên đủ mạnh và `BANK_ACCOUNT_ENCRYPTION_KEY` riêng cho từng môi trường.
+- Không đưa `database/seed.sql` lên môi trường production. Kiểm tra nội dung dump trước khi chia sẻ repository hoặc chạy Compose lần đầu.
+- Giữ database sau mạng riêng; không mở MySQL trực tiếp ra Internet.
+- Dùng HTTPS cho ứng dụng public. API cần kết nối camera, vì vậy trình duyệt phải ở secure context.
+- Lập lịch backup và kiểm thử khôi phục. Giữ khóa mã hóa ngân hàng tách biệt, có kiểm soát truy cập, cùng với quy trình khôi phục database.
+
+## Xử lý sự cố
+
+### Backend báo không kết nối được MySQL
+
+- Kiểm tra MySQL đang chạy và truy cập được tại `DB_HOST:DB_PORT`.
+- Đảm bảo database `attendance_system` đã được tạo, thông tin user/password trong `server/.env` đúng và `database/schema.sql` đã chạy trên database local mới.
+- Kiểm tra `/api/health/database` để xác nhận kết nối.
+
+### Không đăng nhập hoặc không nhận được OTP
+
+- Tài khoản `admin` / `admin123` chỉ được tạo bởi `database/schema.sql` khi khởi tạo database mới; đổi mật khẩu sau khi đăng nhập.
+- Các luồng cần OTP email yêu cầu cấu hình đúng SMTP trong `server/.env`; kiểm tra log backend và cấu hình SMTP của nhà cung cấp.
+- Tài khoản/dữ liệu trong database Docker phụ thuộc vào dump được nạp khi volume được tạo, không nhất thiết giống dữ liệu từ `schema.sql`.
+
+### Camera không mở hoặc nhận diện không hoạt động
+
+- Cấp quyền camera cho trang web và dùng `localhost` hoặc HTTPS.
+- Kiểm tra backend phục vụ được thư mục `/models` và trình duyệt tải được các model trong `server/public/models/`.
+
+### Docker web không truy cập được
+
+- Xem trạng thái và log bằng `docker compose --env-file .env.docker ps` và `docker compose --env-file .env.docker logs`.
+- Kiểm tra cổng `3000`, `443`, `3307` không bị ứng dụng khác chiếm dụng.
+- Kiểm tra hai file chứng chỉ Nginx tồn tại đúng đường dẫn trước khi khởi động Compose.
+- Nếu volume MySQL đã được tạo trước đó, các script trong `/docker-entrypoint-initdb.d` sẽ không chạy lại.
 
 ---
 
-## Lưu ý bảo mật
-
-- Không commit `server/.env` hoặc `server/seed/members.json`
-- Mật khẩu lưu bcrypt hash, không plaintext
-- JWT qua header `Authorization: Bearer <token>`
-- Rate limit: 10 lần đăng nhập sai / 5 phút / IP
+ATTENDLY được tổ chức theo npm workspaces; cài dependencies một lần tại thư mục gốc để làm việc với cả frontend và backend.
