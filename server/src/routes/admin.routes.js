@@ -6,6 +6,7 @@ import { DEFAULT_SHIFTS } from '../config/shifts.js';
 import { createNotification } from '../utils/notifications.js';
 import { parseFaceEmbedding } from '../utils/face.js';
 import { cleanupExpiredAttendancePhotos } from '../utils/attendance-photo-cleanup.js';
+import { createImportedUsername, ImportedUserIdentityError, resolveImportedUser } from '../utils/imported-user.js';
 
 const router = Router();
 router.use(authenticate, authorize('ADMIN'));
@@ -85,19 +86,29 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       const totalWorkDays = Number(member.totalWorkDays);
       const totalWorkDaysValue = Number.isFinite(totalWorkDays) && totalWorkDays >= 0 ? totalWorkDays : null;
       const totalWorkHours = Number(member.totalHours) || 0;
-      if (!name) continue;
+      if (!name) {
+        throw new ImportedUserIdentityError('MISSING_USER_NAME', 'Mỗi thành viên import phải có họ và tên.');
+      }
       if (!mssv) noStudentCodeUsers += 1;
+      if (!mssv && !email) {
+        throw new ImportedUserIdentityError(
+          'MISSING_STABLE_IDENTIFIER',
+          `Không thể xác định duy nhất tài khoản "${name}": cần mã sinh viên hoặc email.`,
+        );
+      }
       const [existing] = await connection.execute(
-        `SELECT id FROM users
-         WHERE role = 'USER'
-           AND ((? <> '' AND student_code = ?)
-             OR (? <> '' AND LOWER(email) = ?)
-             OR (LOWER(TRIM(full_name)) = LOWER(?)
-               AND (student_code IS NULL OR student_code = ?)))
-         LIMIT 1`,
-        [mssv, mssv, email, email, name, mssv],
+        `SELECT id, role, student_code, email,
+                (? <> '' AND student_code = ?) AS student_code_match,
+                (? <> '' AND LOWER(email) = ?) AS email_match,
+                (username = ?) AS username_match
+         FROM users
+         WHERE ((? <> '' AND student_code = ?)
+             OR (? <> '' AND LOWER(email) = LOWER(?))
+             OR username = ?)`,
+        [mssv, mssv, email, email, name.slice(0, 100), mssv, mssv, email, email, name.slice(0, 100)],
       );
-      let userId = existing[0]?.id;
+      const matchedUser = resolveImportedUser(existing, mssv, email);
+      let userId = matchedUser?.id;
       if (userId) {
         await connection.execute(
           `UPDATE users SET full_name = ?, student_code = COALESCE(NULLIF(?, ''), student_code),
@@ -106,11 +117,23 @@ router.post('/attendance/import-excel', async (request, response, next) => {
           [name, mssv, email, phone, totalWorkDaysValue, totalWorkHours, userId],
         );
       } else {
+        let username = name.slice(0, 100);
+        const usernameCollision = existing.some((candidate) => Boolean(candidate.username_match));
+        if (usernameCollision || name.length > 100) {
+          for (let attempt = 0; ; attempt += 1) {
+            username = createImportedUsername(name, mssv, email, attempt);
+            const [usernameMatches] = await connection.execute(
+              'SELECT id FROM users WHERE username = ? LIMIT 1',
+              [username],
+            );
+            if (!usernameMatches.length) break;
+          }
+        }
         const [created] = await connection.execute(
           `INSERT INTO users
            (full_name, student_code, email, phone, username, password_hash, role, must_change_password, total_work_days, total_work_hours)
            VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?, ?)`,
-          [name, mssv, email, phone, name, mssv ? await bcrypt.hash(mssv, 12) : noStudentCodePasswordHash, totalWorkDaysValue ?? 0, totalWorkHours],
+          [name, mssv, email, phone, username, mssv ? await bcrypt.hash(mssv, 12) : noStudentCodePasswordHash, totalWorkDaysValue ?? 0, totalWorkHours],
         );
         userId = created.insertId;
       }
@@ -144,6 +167,20 @@ router.post('/attendance/import-excel', async (request, response, next) => {
     return response.status(201).json({ success: true, imported, unmatched, noStudentCodeUsers });
   } catch (error) {
     await connection.rollback();
+    if (error instanceof ImportedUserIdentityError) {
+      return response.status(error.status).json({
+        success: false,
+        message: error.message,
+        errorCode: error.code,
+      });
+    }
+    if (error.code === 'ER_DUP_ENTRY') {
+      return response.status(409).json({
+        success: false,
+        message: 'Dữ liệu import xung đột với tài khoản hiện có. Hãy kiểm tra mã sinh viên, email và username.',
+        errorCode: 'IMPORT_DUPLICATE_USER',
+      });
+    }
     return next(error);
   } finally {
     connection.release();
