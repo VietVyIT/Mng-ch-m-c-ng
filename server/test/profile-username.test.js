@@ -9,8 +9,13 @@ test('profile username is trimmed before saving', () => {
   assert.equal(normalizeProfileUsername('  student_01  ', 'old-user'), 'student_01');
 });
 
+test('profile username accepts Vietnamese full names with accents and spaces', () => {
+  assert.equal(normalizeProfileUsername('  Trần   Nhật Sinh  ', 'old-user'), 'Trần Nhật Sinh');
+  assert.equal(normalizeProfileUsername('Nguyễn Thị Ánh', 'old-user'), 'Nguyễn Thị Ánh');
+});
+
 test('profile username must use the supported format and length', () => {
-  for (const username of ['ab', 'has space', 'tênđăngnhập', 'user@name', 'x'.repeat(31)]) {
+  for (const username of ['A', 'user@name', 'x'.repeat(101)]) {
     assert.throws(
       () => normalizeProfileUsername(username, 'old-user'),
       ProfileUsernameError,
