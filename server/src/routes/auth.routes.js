@@ -7,6 +7,7 @@ import { authenticate } from '../middlewares/auth.middleware.js';
 import { matchesInitialPassword } from '../utils/initial-password.js';
 import { parseFaceEmbedding } from '../utils/face.js';
 import { sendOtpMessage, isEmail, isPhone } from '../utils/mailer.js';
+import { normalizeProfileUsername, ProfileUsernameError } from '../utils/profile-username.js';
 
 const router = Router();
 
@@ -535,13 +536,41 @@ router.patch('/profile', authenticate, async (request, response, next) => {
     if (studentCode && !/^[A-Za-z0-9._-]{2,30}$/.test(studentCode.trim())) {
       return response.status(400).json({ success: false, message: 'MSSV không hợp lệ.', errorCode: 'VALIDATION_ERROR' });
     }
+    let username;
+    if (Object.hasOwn(request.body, 'username')) {
+      const [currentUsers] = await pool.execute(
+        'SELECT username FROM users WHERE id = ? LIMIT 1',
+        [request.user.userId],
+      );
+      if (!currentUsers[0]) {
+        return response.status(404).json({ success: false, message: 'Không tìm thấy người dùng.', errorCode: 'USER_NOT_FOUND' });
+      }
+      try {
+        username = normalizeProfileUsername(request.body.username, currentUsers[0].username);
+      } catch (error) {
+        if (!(error instanceof ProfileUsernameError)) throw error;
+        return response.status(400).json({ success: false, message: error.message, errorCode: 'VALIDATION_ERROR' });
+      }
+      const [matchingUsers] = await pool.execute(
+        'SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id <> ? LIMIT 1',
+        [username, request.user.userId],
+      );
+      if (matchingUsers.length) {
+        return response.status(409).json({
+          success: false,
+          message: 'Tên đăng nhập này đã được sử dụng. Vui lòng chọn tên khác.',
+          errorCode: 'DUPLICATE_USERNAME',
+        });
+      }
+    }
     try {
       await pool.execute(
         `UPDATE users
-         SET full_name = ?, student_code = ?, phone = ?, email = ?, address = ?, hometown_province_code = ?, hometown_province_name = ?
+         SET full_name = ?, username = COALESCE(?, username), student_code = ?, phone = ?, email = ?, address = ?, hometown_province_code = ?, hometown_province_name = ?
          WHERE id = ?`,
         [
           fullName.trim(),
+          username ?? null,
           studentCode?.trim() || null,
           phone?.trim() || null,
           email?.trim() || null,
@@ -553,6 +582,13 @@ router.patch('/profile', authenticate, async (request, response, next) => {
       );
     } catch (error) {
       if (error.code === 'ER_DUP_ENTRY') {
+        if (error.message?.includes('uq_users_username')) {
+          return response.status(409).json({
+            success: false,
+            message: 'Tên đăng nhập này đã được sử dụng. Vui lòng chọn tên khác.',
+            errorCode: 'DUPLICATE_USERNAME',
+          });
+        }
         return response.status(409).json({ success: false, message: 'MSSV hoặc Email này đã được gán cho tài khoản khác.', errorCode: 'DUPLICATE_ENTRY' });
       }
       throw error;

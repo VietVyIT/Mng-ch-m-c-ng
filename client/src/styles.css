@@ -3591,6 +3591,52 @@ body.modal-open {
   flex: 0 0 auto;
 }
 
+.salary-bank-admin .salary-bank-heading {
+  border-left: 4px solid #15803d;
+  padding-left: 14px;
+}
+
+.salary-bank-admin .salary-bank-heading h2 {
+  margin-top: 0;
+}
+
+.salary-bank-admin .salary-bank-primary {
+  background: #15803d;
+}
+
+.salary-bank-admin .salary-bank-primary:hover:not(:disabled) {
+  background: #166534;
+}
+
+.salary-bank-admin .salary-bank-search:focus-within,
+.salary-bank-admin .salary-bank-toolbar select:focus {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px #16a34a20;
+}
+
+.salary-bank-admin .salary-bank-stats article > svg {
+  color: #15803d;
+}
+
+.salary-bank-admin .salary-bank-stats article.complete > svg,
+.salary-bank-admin .salary-bank-badge.updated {
+  color: #15803d;
+}
+
+.salary-bank-admin .salary-bank-badge.updated {
+  background: #f0fdf4;
+}
+
+.salary-bank-admin .salary-bank-icon-button,
+.salary-bank-admin .salary-bank-pagination button {
+  color: #15803d;
+}
+
+.salary-bank-admin .salary-bank-icon-button:hover,
+.salary-bank-admin .salary-bank-pagination button:not(:disabled):hover {
+  background: #f0fdf4;
+}
+
 .salary-bank-stats {
   display: grid;
   gap: 14px;
@@ -3792,6 +3838,11 @@ body.modal-open {
   .salary-bank-admin-title {
     align-items: flex-start;
     flex-direction: column;
+    gap: 12px;
+  }
+
+  .salary-bank-admin-title .salary-bank-primary {
+    width: 100%;
   }
 
   .salary-bank-stats {
@@ -3821,11 +3872,132 @@ body.modal-open {
     max-width: none;
   }
 
+  .salary-bank-admin .salary-bank-stats article > svg {
+    display: none;
+  }
+
+  .salary-bank-admin .salary-bank-list {
+    padding: 12px;
+  }
+
+  .salary-bank-admin .salary-bank-table-wrap {
+    overflow: visible;
+  }
+
+  .salary-bank-admin .salary-bank-table {
+    display: block;
+    min-width: 0;
+  }
+
+  .salary-bank-admin .salary-bank-table thead {
+    display: none;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody tr {
+    background: #fff;
+    border: 1px solid #d1fae5;
+    border-radius: 10px;
+    display: grid;
+    gap: 0 12px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: hidden;
+    padding: 4px 10px;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td {
+    align-items: baseline;
+    border-bottom: 1px solid #ecfdf5;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 12px;
+    gap: 4px 8px;
+    justify-content: space-between;
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding: 9px 0;
+    text-align: right;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td::before {
+    color: #64748b;
+    content: attr(data-label);
+    flex: 0 0 auto;
+    font-size: 10px;
+    text-align: left;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td.salary-bank-row-index {
+    display: none;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td[data-label="Họ và tên"] {
+    border-bottom-color: #bbf7d0;
+    color: #14532d;
+    font-size: 14px;
+    font-weight: 700;
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td[data-label="Trạng thái"],
+  .salary-bank-admin .salary-bank-table tbody td[data-label="Cập nhật lần cuối"],
+  .salary-bank-admin .salary-bank-table tbody td[data-label="Chi tiết"] {
+    grid-column: 1 / -1;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td[data-label="Chi tiết"] {
+    border-bottom: 0;
+    justify-content: flex-end;
+    padding-bottom: 5px;
+  }
+
+  .salary-bank-admin .salary-bank-table tbody td.salary-bank-table-empty {
+    display: block;
+    grid-column: 1 / -1;
+    text-align: center;
+  }
+
+  .salary-bank-admin .salary-bank-pagination {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .salary-bank-admin .salary-bank-pagination > div {
+    gap: 7px;
+  }
+
+  .salary-bank-admin .salary-bank-detail-modal {
+    padding: 22px 16px;
+  }
+
+  .salary-bank-admin .salary-bank-details > div {
+    gap: 4px 10px;
+    grid-template-columns: minmax(90px, .75fr) minmax(0, 1.25fr);
+  }
+
   .salary-bank-card {
     padding: 17px;
   }
 
   .salary-bank-details > div {
     grid-template-columns: minmax(95px, .8fr) minmax(0, 1.2fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-header .header-title-link {
+    min-width: 0;
+  }
+
+  .dashboard-header h1 {
+    font-size: 16px;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 }

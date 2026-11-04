@@ -1185,7 +1185,6 @@ function SalaryBankAdminPage() {
   const pageCount = Math.max(1, Math.ceil(pagination.total / pagination.limit));
   return <section className="salary-bank-page salary-bank-admin">
     <div className="salary-bank-heading">
-      <span className="section-label">QUẢN TRỊ / ĐỐI SOÁT</span>
       <div className="salary-bank-admin-title"><div><h2>Quản lý ngân hàng nhận lương</h2><p>Theo dõi và quản lý thông tin ngân hàng nhận lương của tất cả thành viên.</p></div><button className="salary-bank-primary" type="button" onClick={exportExcel} disabled={exporting}><FileSpreadsheet size={17} />{exporting ? 'Đang xuất...' : 'Xuất Excel'}</button></div>
     </div>
     {error && <div className="salary-bank-alert error" role="alert">{error}</div>}
@@ -1208,14 +1207,14 @@ function SalaryBankAdminPage() {
         <tbody>
           {loading ? <tr><td colSpan="8" className="salary-bank-table-empty">Đang tải dữ liệu...</td></tr>
             : rows.length ? rows.map((row, index) => <tr key={row.id}>
-              <td>{(page - 1) * pagination.limit + index + 1}</td>
-              <td>{row.fullName}</td>
-              <td>{row.studentCode || '—'}</td>
-              <td>{row.bankName || '—'}</td>
-              <td>{row.accountNumberMasked || '—'}</td>
-              <td><span className={`salary-bank-badge ${row.hasSalaryBank ? 'updated' : 'missing'}`}>{row.hasSalaryBank ? 'Đã cập nhật' : 'Chưa cập nhật'}</span></td>
-              <td>{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString('vi-VN') : '—'}</td>
-              <td><button className="salary-bank-icon-button" type="button" onClick={() => openDetail(row)} aria-label={`Xem chi tiết ${row.fullName}`}><Eye size={17} /></button></td>
+              <td className="salary-bank-row-index">{(page - 1) * pagination.limit + index + 1}</td>
+              <td data-label="Họ và tên">{row.fullName}</td>
+              <td data-label="MSSV">{row.studentCode || '—'}</td>
+              <td data-label="Ngân hàng">{row.bankName || '—'}</td>
+              <td data-label="Số tài khoản">{row.accountNumberMasked || '—'}</td>
+              <td data-label="Trạng thái"><span className={`salary-bank-badge ${row.hasSalaryBank ? 'updated' : 'missing'}`}>{row.hasSalaryBank ? 'Đã cập nhật' : 'Chưa cập nhật'}</span></td>
+              <td data-label="Cập nhật lần cuối">{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString('vi-VN') : '—'}</td>
+              <td data-label="Chi tiết"><button className="salary-bank-icon-button" type="button" onClick={() => openDetail(row)} aria-label={`Xem chi tiết ${row.fullName}`}><Eye size={17} /></button></td>
             </tr>) : <tr><td colSpan="8" className="salary-bank-table-empty">Không có thành viên phù hợp.</td></tr>}
         </tbody>
       </table></div>
@@ -1409,7 +1408,7 @@ function AdminAttendanceWorkArea({ user }) {
 }
 
 function UserProfile({ user, onUserUpdated }) {
-  const [profile, setProfile] = useState({ fullName: user.fullName || '', studentCode: user.studentCode || '', phone: user.phone || '', address: user.address || '', hometownProvinceCode: user.hometownProvinceCode || '', hometownProvinceName: user.hometownProvinceName || '' });
+  const [profile, setProfile] = useState({ fullName: user.fullName || '', username: user.username || '', studentCode: user.studentCode || '', phone: user.phone || '', address: user.address || '', hometownProvinceCode: user.hometownProvinceCode || '', hometownProvinceName: user.hometownProvinceName || '' });
   const [provinces, setProvinces] = useState([]);
   const [message, setMessage] = useState('');
   const [photoPreview, setPhotoPreview] = useState(null);
@@ -1440,8 +1439,9 @@ function UserProfile({ user, onUserUpdated }) {
       const response = await fetch(`${apiUrl}/auth/profile`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(profile) });
       const body = await response.json();
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể cập nhật hồ sơ.');
-      const updatedUser = { ...user, fullName: body.data.full_name, studentCode: body.data.student_code, phone: body.data.phone, address: body.data.address, hometownProvinceCode: body.data.hometown_province_code, hometownProvinceName: body.data.hometown_province_name };
+      const updatedUser = { ...user, fullName: body.data.full_name, username: body.data.username, studentCode: body.data.student_code, phone: body.data.phone, address: body.data.address, hometownProvinceCode: body.data.hometown_province_code, hometownProvinceName: body.data.hometown_province_name };
       onUserUpdated(updatedUser);
+      setProfile((current) => ({ ...current, username: body.data.username }));
       setMessage(body.message);
     } catch (requestError) {
       setError(requestError.message);
@@ -1474,7 +1474,7 @@ function UserProfile({ user, onUserUpdated }) {
   }
 
   return <section className="profile-page"><div className="profile-page-heading"><span className="section-label">MY PROFILE</span><h2>Hồ sơ cá nhân</h2><p>Cập nhật thông tin liên hệ hoặc đổi mật khẩu khi cần.</p></div><div className="profile-grid">
-    <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={user.username} disabled /></label><label>MSSV<input value={profile.studentCode} onChange={(event) => setProfile({ ...profile, studentCode: event.target.value })} placeholder="Nhập mã số sinh viên" /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
+    <form className="content-panel profile-form" onSubmit={saveProfile}><div className="panel-heading"><div><h3>Thông tin cá nhân</h3><p>Thông tin này chỉ thuộc tài khoản của bạn.</p></div></div><label>Họ và tên<input value={profile.fullName} onChange={(event) => setProfile({ ...profile, fullName: event.target.value })} required /></label><label>Tên đăng nhập<input value={profile.username} onChange={(event) => setProfile({ ...profile, username: event.target.value })} minLength={profile.username === user.username ? undefined : 3} maxLength={profile.username === user.username ? undefined : 30} pattern={profile.username === user.username ? undefined : '[A-Za-z0-9._-]{3,30}'} title="Dùng 3-30 ký tự: chữ không dấu, số, dấu chấm, gạch dưới hoặc gạch ngang." autoComplete="username" required /><small>Tên đăng nhập mới dùng để đăng nhập lần sau.</small></label><label>MSSV<input value={profile.studentCode} onChange={(event) => setProfile({ ...profile, studentCode: event.target.value })} placeholder="Nhập mã số sinh viên" /></label><label>Số điện thoại<input value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value })} placeholder="Ví dụ: 0912345678" /></label><label>Địa chỉ hiện tại<input value={profile.address} onChange={(event) => setProfile({ ...profile, address: event.target.value })} placeholder="Số nhà, đường, phường/xã..." /></label><label>Quê quán / Tỉnh, thành<select value={profile.hometownProvinceCode} onChange={(event) => { const selected = provinces.find((province) => String(province.code) === event.target.value); setProfile({ ...profile, hometownProvinceCode: event.target.value, hometownProvinceName: selected?.name || '' }); }}><option value="">Chọn tỉnh/thành</option>{provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select></label>{error && <div className="form-error">{error}</div>}{message && <div className="form-success">{message}</div>}<button className="primary-button" type="submit" disabled={saving}>{saving ? 'ĐANG LƯU...' : 'LƯU THÔNG TIN'}</button></form>
     <form className="content-panel profile-form" onSubmit={changePassword}><div className="panel-heading"><div><h3>Đổi mật khẩu</h3><p>{user.role === 'ADMIN' ? 'Admin đang đăng nhập có thể đặt mật khẩu mới mà không cần nhập mật khẩu cũ.' : 'Nếu chưa đổi lần đầu, dùng mật khẩu khởi tạo hiện tại.'}</p></div><LockKeyhole size={20} /></div>{user.role !== 'ADMIN' && <label>Mật khẩu hiện tại<input type="password" value={password.currentPassword} onChange={(event) => setPassword({ ...password, currentPassword: event.target.value })} required /></label>}<label>Mật khẩu mới<input type="password" value={password.newPassword} onChange={(event) => setPassword({ ...password, newPassword: event.target.value })} minLength={6} required /></label><label>Xác nhận mật khẩu mới<input type="password" value={password.confirmPassword} onChange={(event) => setPassword({ ...password, confirmPassword: event.target.value })} minLength={6} required /></label>{passwordError && <div className="form-error">{passwordError}</div>}{passwordMessage && <div className="form-success">{passwordMessage}</div>}<button className="secondary-button profile-password-button" type="submit" disabled={changingPassword}>{changingPassword ? 'ĐANG CẬP NHẬT...' : 'ĐỔI MẬT KHẨU'}</button></form>
   </div></section>;
 }
