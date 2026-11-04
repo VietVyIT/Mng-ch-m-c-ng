@@ -405,10 +405,27 @@ router.post('/users/:userId/face/reset', async (request, response, next) => {
   }
 });
 
-// DELETE USER COMPLETELY FROM SYSTEM
+async function deleteUserAccounts(connection, userIds) {
+  const placeholders = userIds.map(() => '?').join(',');
+  await connection.execute(`DELETE FROM notifications WHERE recipient_id IN (${placeholders})`, userIds);
+  await deleteLegacyAttendanceForUsers(connection, userIds);
+  await connection.execute(
+    `DELETE FROM attendance_deletion_logs
+     WHERE deleted_by IN (${placeholders})
+        OR attendance_id IN (SELECT id FROM attendance WHERE user_id IN (${placeholders}))`,
+    [...userIds, ...userIds],
+  );
+  await connection.execute(`DELETE FROM attendance_events WHERE user_id IN (${placeholders})`, userIds);
+  await connection.execute(`DELETE FROM imported_attendance_records WHERE user_id IN (${placeholders})`, userIds);
+  await connection.execute(`DELETE FROM attendance WHERE user_id IN (${placeholders})`, userIds);
+  await connection.execute(`DELETE FROM face_re_registration_requests WHERE user_id IN (${placeholders})`, userIds);
+  await connection.execute(`DELETE FROM user_salary_bank_account_audit WHERE user_id IN (${placeholders})`, userIds);
+  await connection.execute(`DELETE FROM user_salary_bank_accounts WHERE user_id IN (${placeholders})`, userIds);
+}
+
 router.delete('/users/:userId', async (request, response, next) => {
   const targetId = Number(request.params.userId);
-  if (!targetId || targetId <= 0) {
+  if (!Number.isInteger(targetId) || targetId <= 0) {
     return response.status(400).json({ success: false, message: 'ID người dùng không hợp lệ.' });
   }
 
@@ -420,33 +437,34 @@ router.delete('/users/:userId', async (request, response, next) => {
   try {
     await connection.beginTransaction();
 
-    const [users] = await connection.execute('SELECT id, full_name, username, role FROM users WHERE id = ? FOR UPDATE', [targetId]);
+    const [users] = await connection.execute(
+      'SELECT id, full_name, username, role FROM users WHERE id = ? FOR UPDATE',
+      [targetId],
+    );
     const user = users[0];
     if (!user) {
       await connection.rollback();
       return response.status(404).json({ success: false, message: 'Không tìm thấy người dùng cần xóa.' });
     }
-
-    if (user.role === 'ADMIN') {
-      const [adminCount] = await connection.execute('SELECT COUNT(*) AS count FROM users WHERE role = \'ADMIN\'');
-      if (adminCount[0]?.count <= 1) {
-        await connection.rollback();
-        return response.status(400).json({ success: false, message: 'Không thể xóa Quản trị viên duy nhất của hệ thống.' });
-      }
+    if (user.role !== 'USER') {
+      await connection.rollback();
+      return response.status(403).json({ success: false, message: 'Chỉ có thể xóa tài khoản thành viên tại mục Quản lý sinh viên.' });
     }
 
-    // Clean up related records in all tables (except users)
-    await connection.execute('DELETE FROM notifications WHERE recipient_id = ? AND type LIKE "%ATTENDANCE%"', [targetId]);
-    await deleteLegacyAttendanceForUsers(connection, [targetId]);
-    await connection.execute('DELETE FROM attendance_events WHERE user_id = ?', [targetId]);
-    await connection.execute('DELETE FROM imported_attendance_records WHERE user_id = ?', [targetId]);
-    await connection.execute('DELETE FROM attendance WHERE user_id = ?', [targetId]);
-    await connection.execute('UPDATE users SET total_work_days = 0 WHERE id = ?', [targetId]);
+    await deleteUserAccounts(connection, [targetId]);
+    const [result] = await connection.execute(
+      'DELETE FROM users WHERE id = ? AND role = \'USER\'',
+      [targetId],
+    );
+    if (result.affectedRows !== 1) {
+      await connection.rollback();
+      return response.status(409).json({ success: false, message: 'Tài khoản đã thay đổi. Vui lòng tải lại danh sách rồi thử lại.' });
+    }
 
     await connection.commit();
     return response.json({
       success: true,
-      message: `Đã xóa dữ liệu điểm danh của thành viên "${user.full_name}" (${user.username}). Tài khoản vẫn được giữ nguyên.`,
+      message: `Đã xóa vĩnh viễn tài khoản "${user.full_name}" (${user.username}) cùng dữ liệu liên quan.`,
     });
   } catch (error) {
     await connection.rollback();
@@ -466,38 +484,42 @@ router.delete('/bulk-delete-users', async (request, response, next) => {
     return response.status(400).json({ success: false, message: 'Vui lòng chọn từ 1 đến 500 người dùng để xóa.' });
   }
 
-  const safeUserIds = userIds.filter((id) => id !== request.user.userId);
-  if (!safeUserIds.length) {
-    return response.status(400).json({ success: false, message: 'Không thể tự xóa tài khoản Quản trị viên.' });
+  if (userIds.includes(request.user.userId)) {
+    return response.status(400).json({ success: false, message: 'Không thể xóa tài khoản quản trị viên đang đăng nhập.' });
   }
 
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
 
-    const placeholders = safeUserIds.map(() => '?').join(',');
+    const placeholders = userIds.map(() => '?').join(',');
     const [users] = await connection.execute(
       `SELECT id, full_name, username, role FROM users WHERE id IN (${placeholders}) FOR UPDATE`,
-      safeUserIds,
+      userIds,
     );
-
-    if (!users.length) {
+    if (users.length !== userIds.length) {
       await connection.rollback();
-      return response.status(404).json({ success: false, message: 'Không tìm thấy người dùng hợp lệ để xóa.' });
+      return response.status(404).json({ success: false, message: 'Không tìm thấy đầy đủ các tài khoản được chọn.' });
+    }
+    if (users.some((user) => user.role !== 'USER')) {
+      await connection.rollback();
+      return response.status(403).json({ success: false, message: 'Chỉ có thể xóa tài khoản thành viên tại mục Quản lý sinh viên.' });
     }
 
-    await connection.execute(`DELETE FROM notifications WHERE recipient_id IN (${placeholders}) AND type LIKE "%ATTENDANCE%"`, safeUserIds);
-    await deleteLegacyAttendanceForUsers(connection, safeUserIds);
-    await connection.execute(`DELETE FROM attendance_events WHERE user_id IN (${placeholders})`, safeUserIds);
-    await connection.execute(`DELETE FROM imported_attendance_records WHERE user_id IN (${placeholders})`, safeUserIds);
-    await connection.execute(`DELETE FROM attendance WHERE user_id IN (${placeholders})`, safeUserIds);
-    await connection.execute(`UPDATE users SET total_work_days = 0 WHERE id IN (${placeholders})`, safeUserIds);
-
+    await deleteUserAccounts(connection, userIds);
+    const [result] = await connection.execute(
+      `DELETE FROM users WHERE role = 'USER' AND id IN (${placeholders})`,
+      userIds,
+    );
+    if (result.affectedRows !== userIds.length) {
+      await connection.rollback();
+      return response.status(409).json({ success: false, message: 'Một số tài khoản đã thay đổi. Vui lòng tải lại danh sách rồi thử lại.' });
+    }
     await connection.commit();
     return response.json({
       success: true,
       deletedCount: users.length,
-      message: `Đã xóa dữ liệu điểm danh của ${users.length} thành viên. Tài khoản vẫn được giữ nguyên.`,
+      message: `Đã xóa vĩnh viễn ${users.length} tài khoản thành viên cùng dữ liệu liên quan.`,
     });
   } catch (error) {
     await connection.rollback();

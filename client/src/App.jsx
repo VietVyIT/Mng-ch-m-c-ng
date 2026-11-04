@@ -1227,8 +1227,7 @@ function SalaryBankAdminPage() {
       {!detail ? <p>Đang tải...</p> : detail.error ? <div className="salary-bank-alert error">{detail.error}</div> : <>
         <dl className="salary-bank-details">
           <div><dt>Họ và tên</dt><dd>{detail.bank?.accountHolderName || detail.fullName}</dd></div>
-          <div><dt>MSSV tài khoản</dt><dd>{detail.accountStudentCode || '—'}</dd></div>
-          <div><dt>MSSV nhận lương</dt><dd>{detail.bank?.studentCode || '—'}</dd></div>
+          <div><dt>MSSV</dt><dd>{detail.bank?.studentCode || '—'}</dd></div>
           <div><dt>Ngân hàng</dt><dd>{detail.bank?.bankName || 'Chưa cập nhật'}</dd></div>
           <div><dt>Số tài khoản</dt><dd className="salary-bank-account-value">{!detail.bank ? '—' : showAccountNumber ? detail.bank.accountNumber : detail.bank.accountNumberMasked}{detail.bank && <button type="button" aria-label={showAccountNumber ? 'Ẩn số tài khoản' : 'Hiện số tài khoản'} onClick={() => showAccountNumber ? setShowAccountNumber(false) : revealAccountNumber()}>{showAccountNumber ? <EyeOff size={17} /> : <Eye size={17} />}</button>}</dd></div>
           <div><dt>Chi nhánh</dt><dd>{detail.bank?.bankBranch || '—'}</dd></div>

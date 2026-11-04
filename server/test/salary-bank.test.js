@@ -87,6 +87,7 @@ test('salary bank export is styled, keeps account numbers as text and neutralize
     {
       full_name: '=2+2',
       student_code: 'SV001',
+      account_student_code: 'ACCOUNT-CODE-MUST-NOT-BE-USED',
       bank_name: 'MB Bank',
       account_number_encrypted: encryptAccountNumber('001234567890', testKey),
       bank_branch: '+Hà Nội',
@@ -98,6 +99,7 @@ test('salary bank export is styled, keeps account numbers as text and neutralize
   const sheet = workbook.getWorksheet('Danh sách ngân hàng nhận lương');
 
   assert.equal(sheet.getCell('B2').value, "'=2+2");
+  assert.equal(sheet.getCell('C2').value, 'SV001');
   assert.equal(sheet.getCell('E2').value, '001234567890');
   assert.equal(sheet.getCell('E2').numFmt, '@');
   assert.equal(sheet.getCell('F2').value, "'+Hà Nội");

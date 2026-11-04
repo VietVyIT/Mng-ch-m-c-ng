@@ -58,7 +58,7 @@ function filterOptions(query) {
     params.push(`%${bank}%`);
   }
   if (search) {
-    clauses.push('(u.full_name LIKE ? OR u.student_code LIKE ? OR b.bank_name LIKE ?)');
+    clauses.push('(u.full_name LIKE ? OR b.student_code LIKE ? OR b.bank_name LIKE ?)');
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
 
@@ -206,7 +206,7 @@ adminRouter.get('/export', async (request, response, next) => {
     await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await connection.beginTransaction();
     const [rows] = await connection.execute(
-      `SELECT u.full_name, u.student_code, b.bank_name, b.account_number_encrypted,
+      `SELECT u.full_name, b.student_code, b.bank_name, b.account_number_encrypted,
               b.bank_branch, b.updated_at
        FROM users u
        LEFT JOIN user_salary_bank_accounts b ON b.user_id = u.id
@@ -235,7 +235,7 @@ adminRouter.get('/', async (request, response, next) => {
     const { where, params, page, limit } = filterOptions(request.query);
     const offset = (page - 1) * limit;
     const [rows] = await pool.execute(
-      `SELECT u.id, u.full_name, u.student_code, b.bank_name, b.account_number_encrypted,
+      `SELECT u.id, u.full_name, b.student_code, b.bank_name, b.account_number_encrypted,
               b.bank_branch, b.updated_at
        FROM users u
        LEFT JOIN user_salary_bank_accounts b ON b.user_id = u.id
@@ -306,7 +306,7 @@ adminRouter.get('/:userId', async (request, response, next) => {
       return response.status(400).json({ success: false, message: 'Mã thành viên không hợp lệ.', errorCode: 'VALIDATION_ERROR' });
     }
     const [rows] = await pool.execute(
-      `SELECT u.id, u.full_name, u.student_code AS account_student_code,
+      `SELECT u.id, u.full_name,
               b.account_holder_name, b.student_code, b.bank_name,
               b.account_number_encrypted, b.bank_branch, b.updated_at
        FROM users u
@@ -333,7 +333,6 @@ adminRouter.get('/:userId', async (request, response, next) => {
       data: {
         id: row.id,
         fullName: row.full_name,
-        accountStudentCode: row.account_student_code,
         bank,
       },
     });
