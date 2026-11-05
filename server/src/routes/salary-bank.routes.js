@@ -234,11 +234,14 @@ adminRouter.get('/export', async (request, response, next) => {
     await connection.beginTransaction();
     const [rows] = await connection.execute(
       `SELECT u.full_name, u.phone, COALESCE(b.student_code, u.student_code) AS student_code,
+              u.total_work_days,
               b.bank_name, b.account_number_encrypted,
               b.bank_branch, b.updated_at
        FROM users u
        LEFT JOIN user_salary_bank_accounts b ON b.user_id = u.id
        WHERE ${where}
+         AND b.user_id IS NOT NULL
+         AND COALESCE(u.total_work_days, 0) > 0
        ORDER BY u.full_name, u.id`,
       params,
     );

@@ -16,6 +16,7 @@ export async function createSalaryBankWorkbook(rows, encryptionKey) {
     { header: 'Chi nhánh', key: 'bankBranch', width: 30 },
     { header: 'Trạng thái', key: 'status', width: 18 },
     { header: 'Ngày cập nhật', key: 'updatedAt', width: 22 },
+    { header: 'Tổng công', key: 'totalWorkDays', width: 14 },
   ];
 
   for (const [index, row] of rows.entries()) {
@@ -31,10 +32,11 @@ export async function createSalaryBankWorkbook(rows, encryptionKey) {
       bankBranch: sanitizeSpreadsheetText(row.bank_branch || ''),
       status: row.updated_at ? 'Đã cập nhật' : 'Chưa cập nhật',
       updatedAt: row.updated_at ? sanitizeSpreadsheetText(String(row.updated_at)) : '',
+      totalWorkDays: Number(row.total_work_days) || 0,
     });
   }
 
-  sheet.autoFilter = { from: 'A1', to: 'I1' };
+  sheet.autoFilter = { from: 'A1', to: 'J1' };
   sheet.getRow(1).height = 25;
   sheet.getRow(1).eachCell((cell) => {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF008080' } };

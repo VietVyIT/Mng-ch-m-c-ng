@@ -114,6 +114,7 @@ test('salary bank export is styled, keeps account numbers as text and neutralize
       account_number_encrypted: encryptAccountNumber('001234567890', testKey),
       bank_branch: '+Hà Nội',
       updated_at: '2026-11-04 10:00:00',
+      total_work_days: '12.5',
     },
   ], testKey);
   const workbook = new ExcelJS.Workbook();
@@ -128,6 +129,8 @@ test('salary bank export is styled, keeps account numbers as text and neutralize
   assert.equal(sheet.getCell('F2').numFmt, '@');
   assert.equal(sheet.getCell('G2').value, "'+Hà Nội");
   assert.equal(sheet.getCell('I1').value, 'Ngày cập nhật');
+  assert.equal(sheet.getCell('J1').value, 'Tổng công');
+  assert.equal(sheet.getCell('J2').value, 12.5);
   assert.equal(sheet.getCell('A1').fill.fgColor.argb, 'FF008080');
   assert.equal(sheet.views[0].ySplit, 1);
   assert.ok(sheet.autoFilter);
