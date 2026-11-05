@@ -3368,6 +3368,13 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
   const [activeEventType, setActiveEventType] = useState('all');
   const [activeShift, setActiveShift] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sheetSnap, setSheetSnap] = useState('collapsed');
+  const [sheetDragging, setSheetDragging] = useState(false);
+  const modalRef = useRef(null);
+  const sheetRef = useRef(null);
+  const requestListRef = useRef(null);
+  const collapsedTopRef = useRef(0);
+  const touchGestureRef = useRef(null);
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -3376,6 +3383,106 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
+
+  useEffect(() => {
+    const modal = modalRef.current;
+    const sheet = sheetRef.current;
+    const list = requestListRef.current;
+    if (!modal || !sheet || !list) return undefined;
+
+    function getSnapPoints() {
+      const modalRect = modal.getBoundingClientRect();
+      const filters = modal.querySelector('.approval-event-filter');
+      const filterBottom = filters
+        ? filters.getBoundingClientRect().bottom - modalRect.top
+        : modalRect.height * 0.55;
+      const collapsed = Math.min(
+        modalRect.height - 170,
+        Math.max(modalRect.height * 0.48, filterBottom + 8),
+      );
+      collapsedTopRef.current = Math.max(0, collapsed);
+      modal.style.setProperty('--sheet-collapsed-top', `${collapsedTopRef.current}px`);
+      return [
+        Math.max(8, window.innerHeight * 0.012),
+        modalRect.height * 0.34,
+        collapsedTopRef.current,
+      ];
+    }
+
+    function beginTouch(event) {
+      if (event.touches.length !== 1) return;
+      const target = event.target;
+      const isHandle = target.closest('.all-requests-sheet-handle');
+      if (!isHandle && target.closest('button, input, select, textarea, a')) return;
+      const touch = event.touches[0];
+      touchGestureRef.current = {
+        startY: touch.clientY,
+        lastY: touch.clientY,
+        lastTime: performance.now(),
+        initialTop: sheet.getBoundingClientRect().top - modal.getBoundingClientRect().top,
+        dragging: false,
+      };
+    }
+
+    function moveTouch(event) {
+      const gesture = touchGestureRef.current;
+      if (!gesture || event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const delta = touch.clientY - gesture.startY;
+      const direction = Math.sign(delta);
+      const canMoveSheet = direction < 0
+        ? sheetSnap !== 'full' && list.scrollTop <= 0
+        : sheetSnap !== 'collapsed' && list.scrollTop <= 0;
+      if (!gesture.dragging && !canMoveSheet) {
+        gesture.startY = touch.clientY;
+        gesture.initialTop = sheet.getBoundingClientRect().top - modal.getBoundingClientRect().top;
+        gesture.lastY = touch.clientY;
+        gesture.lastTime = performance.now();
+        return;
+      }
+      if (!gesture.dragging && Math.abs(delta) < 6) return;
+      if (!canMoveSheet) return;
+
+      event.preventDefault();
+      gesture.dragging = true;
+      setSheetDragging(true);
+      const points = getSnapPoints();
+      const nextTop = Math.max(points[0], Math.min(points[2], gesture.initialTop + delta));
+      sheet.style.top = `${nextTop}px`;
+      gesture.velocity = (touch.clientY - gesture.lastY) / Math.max(1, performance.now() - gesture.lastTime);
+      gesture.lastY = touch.clientY;
+      gesture.lastTime = performance.now();
+    }
+
+    function endTouch() {
+      const gesture = touchGestureRef.current;
+      touchGestureRef.current = null;
+      if (!gesture?.dragging) return;
+      const points = getSnapPoints();
+      const currentTop = Number.parseFloat(sheet.style.top) || points[2];
+      const projectedTop = Math.max(points[0], Math.min(points[2], currentTop + (gesture.velocity || 0) * 180));
+      const closestIndex = points.reduce((closest, point, index) => (
+        Math.abs(point - projectedTop) < Math.abs(points[closest] - projectedTop) ? index : closest
+      ), 0);
+      sheet.style.top = '';
+      setSheetSnap(['full', 'half', 'collapsed'][closestIndex]);
+      setSheetDragging(false);
+    }
+
+    getSnapPoints();
+    window.addEventListener('resize', getSnapPoints);
+    sheet.addEventListener('touchstart', beginTouch, { passive: true });
+    sheet.addEventListener('touchmove', moveTouch, { passive: false });
+    sheet.addEventListener('touchend', endTouch, { passive: true });
+    sheet.addEventListener('touchcancel', endTouch, { passive: true });
+    return () => {
+      window.removeEventListener('resize', getSnapPoints);
+      sheet.removeEventListener('touchstart', beginTouch);
+      sheet.removeEventListener('touchmove', moveTouch);
+      sheet.removeEventListener('touchend', endTouch);
+      sheet.removeEventListener('touchcancel', endTouch);
+    };
+  }, [sheetSnap]);
 
   const counts = {
     all: requests.length,
@@ -3411,7 +3518,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
 
   return (
     <motion.div className="modal-backdrop all-requests-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
-      <div className="all-requests-modal" onClick={(e) => e.stopPropagation()}>
+      <div ref={modalRef} className="all-requests-modal" onClick={(e) => e.stopPropagation()}>
         <div className="all-requests-header">
           <div>
             <h3>Toàn bộ yêu cầu chấm công chờ duyệt</h3>
@@ -3519,7 +3626,22 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
           ))}
         </div>
 
-        <div className="all-requests-table-wrap">
+        <div
+          ref={sheetRef}
+          className={`all-requests-sheet snap-${sheetSnap}${sheetDragging ? ' is-dragging' : ''}`}
+        >
+          <button
+            type="button"
+            className="all-requests-sheet-handle"
+            aria-label="Kéo để mở rộng hoặc thu gọn danh sách"
+            onClick={(event) => {
+              if (event.detail !== 0) return;
+              setSheetSnap((current) => current === 'collapsed' ? 'half' : current === 'half' ? 'full' : 'collapsed');
+            }}
+          >
+            <span />
+          </button>
+          <div ref={requestListRef} className="all-requests-table-wrap">
           <table className="all-requests-table">
             <thead>
               <tr>
@@ -3601,6 +3723,7 @@ function AllRequestsModal({ requests, onClose, onReview, onReject, onBulkReview,
               )}
             </tbody>
           </table>
+          </div>
         </div>
       </div>
     </motion.div>
