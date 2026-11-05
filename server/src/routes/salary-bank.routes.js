@@ -82,7 +82,7 @@ async function getSalaryBankStats(connection) {
 userRouter.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT u.phone, b.account_holder_name, b.student_code, b.bank_name,
+      `SELECT COALESCE(b.phone, u.phone) AS phone, b.account_holder_name, b.student_code, b.bank_name,
               b.account_number_encrypted, b.bank_branch, b.created_at, b.updated_at
        FROM users u
        LEFT JOIN user_salary_bank_accounts b ON b.user_id = u.id
@@ -117,7 +117,7 @@ userRouter.put('/', async (request, response, next) => {
       throw new SalaryBankError('USER_NOT_FOUND', 'Không tìm thấy tài khoản.', 404);
     }
     const [rows] = await connection.execute(
-      `SELECT account_holder_name, student_code, bank_name, account_number_encrypted,
+      `SELECT account_holder_name, student_code, phone, bank_name, account_number_encrypted,
               bank_branch, created_at, updated_at
        FROM user_salary_bank_accounts WHERE user_id = ? FOR UPDATE`,
       [request.user.userId],
@@ -145,26 +145,20 @@ userRouter.put('/', async (request, response, next) => {
       bankName: current.bank_name,
       accountNumber: decryptAccountNumber(current.account_number_encrypted, env.bankAccountEncryptionKey),
       bankBranch: current.bank_branch,
-      phone: userRows[0].phone || '',
+      phone: current.phone || userRows[0].phone || '',
     } : null;
     const changedFields = changedSalaryBankFields(previous, input);
-
-    if ((userRows[0].phone || '') !== input.phone) {
-      await connection.execute(
-        'UPDATE users SET phone = ? WHERE id = ?',
-        [input.phone, request.user.userId],
-      );
-    }
 
     if (!current) {
       await connection.execute(
         `INSERT INTO user_salary_bank_accounts
-          (user_id, account_holder_name, student_code, bank_name, account_number_encrypted, bank_branch)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+          (user_id, account_holder_name, student_code, phone, bank_name, account_number_encrypted, bank_branch)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           request.user.userId,
           input.accountHolderName,
           input.studentCode,
+          input.phone,
           input.bankName,
           encryptedAccountNumber,
           input.bankBranch,
@@ -173,12 +167,13 @@ userRouter.put('/', async (request, response, next) => {
     } else if (changedFields.length) {
       await connection.execute(
         `UPDATE user_salary_bank_accounts
-         SET account_holder_name = ?, student_code = ?, bank_name = ?,
+         SET account_holder_name = ?, student_code = ?, phone = ?, bank_name = ?,
              account_number_encrypted = ?, bank_branch = ?
          WHERE user_id = ?`,
         [
           input.accountHolderName,
           input.studentCode,
+          input.phone,
           input.bankName,
           encryptedAccountNumber,
           input.bankBranch,
@@ -201,7 +196,7 @@ userRouter.put('/', async (request, response, next) => {
       );
     }
     const [savedRows] = await connection.execute(
-      `SELECT u.phone, b.account_holder_name, b.student_code, b.bank_name,
+      `SELECT b.phone, b.account_holder_name, b.student_code, b.bank_name,
               b.account_number_encrypted, b.bank_branch, b.created_at, b.updated_at
        FROM user_salary_bank_accounts b
        JOIN users u ON u.id = b.user_id
@@ -233,7 +228,8 @@ adminRouter.get('/export', async (request, response, next) => {
     await connection.query('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
     await connection.beginTransaction();
     const [rows] = await connection.execute(
-      `SELECT u.full_name, u.phone, COALESCE(b.student_code, u.student_code) AS student_code,
+      `SELECT u.full_name, COALESCE(b.phone, u.phone) AS phone,
+              COALESCE(b.student_code, u.student_code) AS student_code,
               u.total_work_days,
               b.bank_name, b.account_number_encrypted,
               b.bank_branch, b.updated_at
@@ -266,7 +262,8 @@ adminRouter.get('/', async (request, response, next) => {
     const { where, params, page, limit } = filterOptions(request.query);
     const offset = (page - 1) * limit;
     const [rows] = await pool.execute(
-      `SELECT u.id, u.full_name, u.phone, COALESCE(b.student_code, u.student_code) AS student_code,
+      `SELECT u.id, u.full_name, COALESCE(b.phone, u.phone) AS phone,
+              COALESCE(b.student_code, u.student_code) AS student_code,
               b.bank_name, b.account_number_encrypted,
               b.bank_branch, b.updated_at
        FROM users u
@@ -339,7 +336,8 @@ adminRouter.get('/:userId', async (request, response, next) => {
       return response.status(400).json({ success: false, message: 'Mã thành viên không hợp lệ.', errorCode: 'VALIDATION_ERROR' });
     }
     const [rows] = await pool.execute(
-      `SELECT u.id, u.full_name, u.phone, u.student_code AS user_student_code,
+      `SELECT u.id, u.full_name, COALESCE(b.phone, u.phone) AS bank_phone,
+              u.student_code AS user_student_code,
               b.account_holder_name, b.student_code, b.bank_name,
               b.account_number_encrypted, b.bank_branch, b.updated_at
        FROM users u
@@ -366,7 +364,7 @@ adminRouter.get('/:userId', async (request, response, next) => {
       data: {
         id: row.id,
         fullName: row.full_name,
-        phone: row.phone || '',
+        phone: row.bank_phone || '',
         studentCode: row.user_student_code || '',
         bank,
       },

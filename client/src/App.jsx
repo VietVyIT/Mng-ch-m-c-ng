@@ -965,7 +965,7 @@ function PageContent({ page, user, onUserUpdated, onNavigate }) {
   if (page === 'Khuôn mặt') return <FaceRegistrationPage user={user} onUserUpdated={onUserUpdated} />;
   if (user.role === 'USER') {
     if (page === 'Lịch sử cá nhân') return <AttendanceHistory user={user} />;
-    if (page === 'Ngân hàng nhận lương') return <SalaryBankUserPage user={user} onUserUpdated={onUserUpdated} />;
+    if (page === 'Ngân hàng nhận lương') return <SalaryBankUserPage user={user} />;
     if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
     return <UserPortal user={user} />;
   }
@@ -986,7 +986,7 @@ const salaryBankOptions = [
   'MSB', 'SeABank', 'Eximbank', 'Nam A Bank', 'Ngân hàng khác',
 ];
 
-function SalaryBankUserPage({ user, onUserUpdated }) {
+function SalaryBankUserPage({ user }) {
   const [saved, setSaved] = useState(null);
   const [form, setForm] = useState({
     accountHolderName: user.fullName || '',
@@ -1077,7 +1077,6 @@ function SalaryBankUserPage({ user, onUserUpdated }) {
       });
       setEditing(false);
       setShowAccountNumber(false);
-      onUserUpdated({ ...user, phone: body.data.phone });
       setSuccess('Thông tin ngân hàng nhận lương đã được cập nhật thành công.');
     } catch (requestError) {
       setError(requestError.message || 'Không thể lưu thông tin ngân hàng.');

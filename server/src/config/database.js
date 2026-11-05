@@ -105,6 +105,7 @@ export const initDatabase = async () => {
         user_id BIGINT UNSIGNED NOT NULL,
         account_holder_name VARCHAR(150) NOT NULL,
         student_code VARCHAR(30) NOT NULL,
+        phone VARCHAR(30) NULL,
         bank_name VARCHAR(120) NOT NULL,
         account_number_encrypted TEXT NOT NULL,
         bank_branch VARCHAR(150) NOT NULL,
@@ -115,6 +116,24 @@ export const initDatabase = async () => {
         CONSTRAINT fk_salary_bank_user FOREIGN KEY (user_id) REFERENCES users (id)
           ON UPDATE CASCADE ON DELETE CASCADE
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+    );
+    const [salaryBankColumns] = await connection.query(
+      `SELECT COLUMN_NAME
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'user_salary_bank_accounts'`,
+    );
+    const salaryBankColumnNames = new Set(salaryBankColumns.map((column) => column.COLUMN_NAME));
+    if (!salaryBankColumnNames.has('phone')) {
+      await connection.query(
+        'ALTER TABLE user_salary_bank_accounts ADD COLUMN phone VARCHAR(30) NULL AFTER student_code',
+      );
+    }
+    await connection.query(
+      `UPDATE user_salary_bank_accounts b
+       JOIN users u ON u.id = b.user_id
+       SET b.phone = u.phone
+       WHERE b.phone IS NULL AND u.phone IS NOT NULL`,
     );
     await connection.query(
       `CREATE TABLE IF NOT EXISTS user_salary_bank_account_audit (

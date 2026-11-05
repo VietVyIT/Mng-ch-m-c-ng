@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS user_salary_bank_accounts (
   user_id BIGINT UNSIGNED NOT NULL,
   account_holder_name VARCHAR(150) NOT NULL,
   student_code VARCHAR(30) NOT NULL,
+  phone VARCHAR(30) NULL,
   bank_name VARCHAR(120) NOT NULL,
   account_number_encrypted TEXT NOT NULL,
   bank_branch VARCHAR(150) NOT NULL,

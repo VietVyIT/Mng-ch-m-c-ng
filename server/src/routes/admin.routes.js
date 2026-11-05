@@ -114,7 +114,7 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       if (userId) {
         await connection.execute(
           `UPDATE users SET full_name = ?, student_code = COALESCE(NULLIF(?, ''), student_code),
-           email = COALESCE(NULLIF(?, ''), email), phone = NULLIF(?, ''),
+           email = COALESCE(NULLIF(?, ''), email), phone = COALESCE(NULLIF(?, ''), phone),
            total_work_days = COALESCE(?, total_work_days), total_work_hours = ? WHERE id = ?`,
           [name, mssv, email, phone, totalWorkDaysValue, totalWorkHours, userId],
         );
