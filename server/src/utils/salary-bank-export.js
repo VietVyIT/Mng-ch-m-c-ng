@@ -10,6 +10,7 @@ export async function createSalaryBankWorkbook(rows, encryptionKey) {
     { header: 'STT', key: 'index', width: 7 },
     { header: 'Họ và tên', key: 'fullName', width: 28 },
     { header: 'MSSV', key: 'studentCode', width: 18 },
+    { header: 'Số điện thoại', key: 'phone', width: 18 },
     { header: 'Ngân hàng', key: 'bankName', width: 24 },
     { header: 'Số tài khoản', key: 'accountNumber', width: 24, style: { numFmt: '@' } },
     { header: 'Chi nhánh', key: 'bankBranch', width: 30 },
@@ -22,6 +23,7 @@ export async function createSalaryBankWorkbook(rows, encryptionKey) {
       index: index + 1,
       fullName: sanitizeSpreadsheetText(row.full_name),
       studentCode: sanitizeSpreadsheetText(row.student_code || ''),
+      phone: sanitizeSpreadsheetText(row.phone || ''),
       bankName: sanitizeSpreadsheetText(row.bank_name || ''),
       accountNumber: sanitizeSpreadsheetText(row.account_number_encrypted
         ? decryptAccountNumber(row.account_number_encrypted, encryptionKey)
@@ -32,7 +34,7 @@ export async function createSalaryBankWorkbook(rows, encryptionKey) {
     });
   }
 
-  sheet.autoFilter = { from: 'A1', to: 'H1' };
+  sheet.autoFilter = { from: 'A1', to: 'I1' };
   sheet.getRow(1).height = 25;
   sheet.getRow(1).eachCell((cell) => {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF008080' } };

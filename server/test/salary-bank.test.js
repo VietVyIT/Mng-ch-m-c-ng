@@ -107,6 +107,7 @@ test('salary bank export is styled, keeps account numbers as text and neutralize
   const buffer = await createSalaryBankWorkbook([
     {
       full_name: '=2+2',
+      phone: '0912345678',
       student_code: 'SV001',
       account_student_code: 'ACCOUNT-CODE-MUST-NOT-BE-USED',
       bank_name: 'MB Bank',
@@ -121,9 +122,12 @@ test('salary bank export is styled, keeps account numbers as text and neutralize
 
   assert.equal(sheet.getCell('B2').value, "'=2+2");
   assert.equal(sheet.getCell('C2').value, 'SV001');
-  assert.equal(sheet.getCell('E2').value, '001234567890');
-  assert.equal(sheet.getCell('E2').numFmt, '@');
-  assert.equal(sheet.getCell('F2').value, "'+Hà Nội");
+  assert.equal(sheet.getCell('D2').value, '0912345678');
+  assert.equal(sheet.getCell('E2').value, 'MB Bank');
+  assert.equal(sheet.getCell('F2').value, '001234567890');
+  assert.equal(sheet.getCell('F2').numFmt, '@');
+  assert.equal(sheet.getCell('G2').value, "'+Hà Nội");
+  assert.equal(sheet.getCell('I1').value, 'Ngày cập nhật');
   assert.equal(sheet.getCell('A1').fill.fgColor.argb, 'FF008080');
   assert.equal(sheet.views[0].ySplit, 1);
   assert.ok(sheet.autoFilter);

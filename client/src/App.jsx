@@ -1449,19 +1449,20 @@ function SalaryBankAdminPage() {
         </select>
       </div>
       <div className="salary-bank-table-wrap"><table className="salary-bank-table">
-        <thead><tr><th>STT</th><th>Họ và tên</th><th>MSSV</th><th>Ngân hàng</th><th>Số tài khoản</th><th>Trạng thái</th><th>Cập nhật lần cuối</th><th></th></tr></thead>
+        <thead><tr><th>STT</th><th>Họ và tên</th><th>MSSV</th><th>Số điện thoại</th><th>Ngân hàng</th><th>Số tài khoản</th><th>Trạng thái</th><th>Cập nhật lần cuối</th><th></th></tr></thead>
         <tbody>
-          {loading ? <tr><td colSpan="8" className="salary-bank-table-empty">Đang tải dữ liệu...</td></tr>
+          {loading ? <tr><td colSpan="9" className="salary-bank-table-empty">Đang tải dữ liệu...</td></tr>
             : rows.length ? rows.map((row, index) => <tr key={row.id}>
               <td className="salary-bank-row-index">{(page - 1) * pagination.limit + index + 1}</td>
               <td data-label="Họ và tên">{row.fullName}</td>
               <td data-label="MSSV">{row.studentCode || '—'}</td>
+              <td data-label="Số điện thoại">{row.phone || '—'}</td>
               <td data-label="Ngân hàng">{row.bankName || '—'}</td>
               <td data-label="Số tài khoản">{row.accountNumberMasked || '—'}</td>
               <td data-label="Trạng thái"><span className={`salary-bank-badge ${row.hasSalaryBank ? 'updated' : 'missing'}`}>{row.hasSalaryBank ? 'Đã cập nhật' : 'Chưa cập nhật'}</span></td>
               <td data-label="Cập nhật lần cuối">{row.updatedAt ? new Date(row.updatedAt).toLocaleDateString('vi-VN') : '—'}</td>
               <td data-label="Chi tiết"><button className="salary-bank-icon-button" type="button" onClick={() => openDetail(row)} aria-label={`Xem chi tiết ${row.fullName}`}><Eye size={17} /></button></td>
-            </tr>) : <tr><td colSpan="8" className="salary-bank-table-empty">Không có thành viên phù hợp.</td></tr>}
+            </tr>) : <tr><td colSpan="9" className="salary-bank-table-empty">Không có thành viên phù hợp.</td></tr>}
         </tbody>
       </table></div>
       <div className="salary-bank-pagination"><span>{pagination.total} thành viên</span><div><button type="button" disabled={page <= 1 || loading} onClick={() => setPage((value) => Math.max(1, value - 1))} aria-label="Trang trước"><ArrowLeft size={16} /></button><span>Trang {page} / {pageCount}</span><button type="button" disabled={page >= pageCount || loading} onClick={() => setPage((value) => Math.min(pageCount, value + 1))} aria-label="Trang sau"><ArrowRight size={16} /></button></div></div>
@@ -1472,7 +1473,8 @@ function SalaryBankAdminPage() {
       {!detail ? <p>Đang tải...</p> : detail.error ? <div className="salary-bank-alert error">{detail.error}</div> : <>
         <dl className="salary-bank-details">
           <div><dt>Họ và tên</dt><dd>{detail.bank?.accountHolderName || detail.fullName}</dd></div>
-          <div><dt>MSSV</dt><dd>{detail.bank?.studentCode || '—'}</dd></div>
+          <div><dt>MSSV</dt><dd>{detail.bank?.studentCode || detail.studentCode || '—'}</dd></div>
+          <div><dt>Số điện thoại</dt><dd>{detail.phone || '—'}</dd></div>
           <div><dt>Ngân hàng</dt><dd>{detail.bank?.bankName || 'Chưa cập nhật'}</dd></div>
           <div><dt>Số tài khoản</dt><dd className="salary-bank-account-value">{!detail.bank ? '—' : showAccountNumber ? detail.bank.accountNumber : detail.bank.accountNumberMasked}{detail.bank && <button type="button" aria-label={showAccountNumber ? 'Ẩn số tài khoản' : 'Hiện số tài khoản'} onClick={() => showAccountNumber ? setShowAccountNumber(false) : revealAccountNumber()}>{showAccountNumber ? <EyeOff size={17} /> : <Eye size={17} />}</button>}</dd></div>
           <div><dt>Chi nhánh</dt><dd>{detail.bank?.bankBranch || '—'}</dd></div>
