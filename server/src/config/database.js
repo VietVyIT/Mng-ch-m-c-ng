@@ -132,6 +132,45 @@ export const initDatabase = async () => {
           ON UPDATE CASCADE ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     );
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS bank_update_notification_settings (
+        id TINYINT UNSIGNED NOT NULL,
+        is_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+        revision BIGINT UNSIGNED NOT NULL DEFAULT 1,
+        title VARCHAR(150) NOT NULL DEFAULT 'Cập nhật tài khoản ngân hàng',
+        message VARCHAR(2000) NOT NULL DEFAULT 'Vui lòng cập nhật thông tin tài khoản ngân hàng và số điện thoại để đảm bảo quá trình nhận lương và các khoản hỗ trợ được thuận tiện, chính xác.',
+        button_label VARCHAR(60) NOT NULL DEFAULT 'Cập nhật ngay',
+        updated_by BIGINT UNSIGNED NULL,
+        updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+        PRIMARY KEY (id),
+        CONSTRAINT fk_bank_update_notification_updated_by FOREIGN KEY (updated_by) REFERENCES users (id)
+          ON UPDATE CASCADE ON DELETE SET NULL
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+    );
+    const [notificationSettingColumns] = await connection.query(
+      `SELECT COLUMN_NAME
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'bank_update_notification_settings'`,
+    );
+    const existingNotificationSettingColumns = new Set(
+      notificationSettingColumns.map((column) => column.COLUMN_NAME),
+    );
+    for (const [column, definition] of [
+      ['title', "VARCHAR(150) NOT NULL DEFAULT 'Cập nhật tài khoản ngân hàng'"],
+      ['message', "VARCHAR(2000) NOT NULL DEFAULT 'Vui lòng cập nhật thông tin tài khoản ngân hàng và số điện thoại để đảm bảo quá trình nhận lương và các khoản hỗ trợ được thuận tiện, chính xác.'"],
+      ['button_label', "VARCHAR(60) NOT NULL DEFAULT 'Cập nhật ngay'"],
+    ]) {
+      if (!existingNotificationSettingColumns.has(column)) {
+        await connection.query(
+          `ALTER TABLE bank_update_notification_settings ADD COLUMN ${column} ${definition}`,
+        );
+      }
+    }
+    await connection.query(
+      `INSERT IGNORE INTO bank_update_notification_settings (id, is_enabled, revision)
+       VALUES (1, FALSE, 1)`,
+    );
     const [salaryBankTimestampColumns] = await connection.query(
       `SELECT TABLE_NAME, COLUMN_NAME, DATETIME_PRECISION
        FROM information_schema.COLUMNS

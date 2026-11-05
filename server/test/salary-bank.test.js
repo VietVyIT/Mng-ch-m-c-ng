@@ -17,12 +17,14 @@ const testKey = '1'.repeat(64);
 test('salary bank input is trimmed while preserving account number leading zeroes', () => {
   assert.deepEqual(normalizeSalaryBankInput({
     accountHolderName: '  Nguyễn   Văn A ',
+    phone: ' 0912 345 678 ',
     studentCode: ' SV001 ',
     bankName: ' Ngân hàng A ',
     accountNumber: ' 0012 3456 ',
     bankBranch: ' Chi nhánh Hà Nội ',
   }), {
     accountHolderName: 'Nguyễn Văn A',
+    phone: '0912 345 678',
     studentCode: 'SV001',
     bankName: 'Ngân hàng A',
     accountNumber: '00123456',
@@ -36,8 +38,27 @@ test('salary bank input rejects missing required fields and unsafe characters', 
     (error) => error instanceof SalaryBankError
       && error.code === 'VALIDATION_ERROR'
       && Boolean(error.fields.accountHolderName)
+      && Boolean(error.fields.phone)
       && Boolean(error.fields.accountNumber),
   );
+});
+
+test('salary bank input rejects malformed phone numbers', () => {
+  for (const phone of ['phone-number', '++++++++', '1234567890123456']) {
+    assert.throws(
+      () => normalizeSalaryBankInput({
+        accountHolderName: 'Nguyễn Văn A',
+        phone,
+        studentCode: 'SV001',
+        bankName: 'MB Bank',
+        accountNumber: '001234',
+        bankBranch: 'Hà Nội',
+      }),
+      (error) => error instanceof SalaryBankError
+        && error.code === 'VALIDATION_ERROR'
+        && error.fields.phone === 'Số điện thoại không hợp lệ.',
+    );
+  }
 });
 
 test('salary bank account numbers encrypt and decrypt with the configured key', () => {
@@ -77,9 +98,9 @@ test('spreadsheet text neutralizes formula prefixes and leaves safe numbers unch
 });
 
 test('salary bank audit field list contains only changed field names', () => {
-  const previous = { bankName: 'A', accountNumber: '001', bankBranch: 'Hà Nội' };
-  const next = { bankName: 'A', accountNumber: '002', bankBranch: 'Hồ Chí Minh' };
-  assert.deepEqual(changedSalaryBankFields(previous, next), ['accountNumber', 'bankBranch']);
+  const previous = { bankName: 'A', accountNumber: '001', bankBranch: 'Hà Nội', phone: '0912345678' };
+  const next = { bankName: 'A', accountNumber: '002', bankBranch: 'Hồ Chí Minh', phone: '0900000000' };
+  assert.deepEqual(changedSalaryBankFields(previous, next), ['accountNumber', 'bankBranch', 'phone']);
 });
 
 test('salary bank export is styled, keeps account numbers as text and neutralizes formulas', async () => {

@@ -378,6 +378,7 @@ const adminNavItems = [
   { label: 'Quản lý sinh viên', icon: UsersRound },
   { label: 'Quản lý ca làm', icon: Clock3 },
   { label: 'Quản lý ngân hàng nhận lương', icon: Landmark },
+  { label: 'Thông báo', icon: Bell },
   { label: 'Hồ sơ', icon: UserRound },
 ];
 const userNavItems = [
@@ -762,8 +763,104 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
         <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><h1>{page}</h1></div><div className="header-user"><NotificationCenter onNavigate={onNavigate} /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
         <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} onNavigate={onNavigate} /></motion.div></AnimatePresence>
       </main>
+      {user.role === 'USER' && <BankUpdatePrompt user={user} active={page === 'Chấm công'} onNavigate={onNavigate} />}
     </div>
   );
+}
+
+function BankUpdatePrompt({ user, active, onNavigate }) {
+  const [settings, setSettings] = useState(null);
+  const [dismissed, setDismissed] = useState(false);
+  const [error, setError] = useState('');
+  const revisionRef = useRef('');
+
+  useEffect(() => {
+    if (!active) return undefined;
+    let mounted = true;
+    let loading = false;
+
+    async function refreshSettings() {
+      if (loading) return;
+      loading = true;
+      try {
+        const token = localStorage.getItem('attendance_token');
+        const response = await fetch(`${apiUrl}/me/bank-update-notification`, {
+          cache: 'no-store',
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || !body.success || typeof body.data?.enabled !== 'boolean') {
+          throw new Error(body.message || 'Không thể kiểm tra thông báo cập nhật ngân hàng.');
+        }
+        if (!mounted) return;
+        const revision = String(body.data.revision);
+        if (revisionRef.current && revisionRef.current !== revision) setDismissed(false);
+        revisionRef.current = revision;
+        setSettings(body.data);
+        setError('');
+      } catch (requestError) {
+        if (mounted) setError(requestError.message || 'Không thể kiểm tra thông báo cập nhật ngân hàng.');
+      } finally {
+        loading = false;
+      }
+    }
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refreshSettings();
+    };
+    refreshSettings();
+    const timer = window.setInterval(refreshSettings, 15000);
+    window.addEventListener('focus', refreshSettings);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      mounted = false;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshSettings);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [active]);
+
+  function dismiss() {
+    setDismissed(true);
+  }
+
+  const showPrompt = active
+    && settings?.enabled
+    && !dismissed;
+
+  return <>
+    {error && <div className="bank-update-config-error" role="alert">{error}</div>}
+    <AnimatePresence>
+      {showPrompt && <motion.div
+        className="bank-update-modal-backdrop"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.18 }}
+      >
+        <motion.section
+          className="bank-update-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bank-update-modal-title"
+          initial={{ opacity: 0, y: 14, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 8, scale: 0.98 }}
+          transition={{ duration: 0.2 }}
+        >
+          <button className="bank-update-modal-close" type="button" onClick={dismiss} aria-label="Đóng thông báo"><X size={20} /></button>
+          <div className="bank-update-modal-icon"><Landmark size={32} strokeWidth={1.8} /></div>
+          <span className="bank-update-modal-eyebrow">THÔNG TIN NHẬN LƯƠNG</span>
+          <h2 id="bank-update-modal-title">{settings.title}</h2>
+          <p>{settings.message}</p>
+          <button className="bank-update-modal-action" type="button" onClick={() => {
+            dismiss();
+            onNavigate('Ngân hàng nhận lương');
+          }}>{settings.buttonLabel}<ArrowRight size={18} /></button>
+        </motion.section>
+      </motion.div>}
+    </AnimatePresence>
+  </>;
 }
 
 function ProfileMenu({ user, onNavigate, onLogout }) {
@@ -868,10 +965,11 @@ function PageContent({ page, user, onUserUpdated, onNavigate }) {
   if (page === 'Khuôn mặt') return <FaceRegistrationPage user={user} onUserUpdated={onUserUpdated} />;
   if (user.role === 'USER') {
     if (page === 'Lịch sử cá nhân') return <AttendanceHistory user={user} />;
-    if (page === 'Ngân hàng nhận lương') return <SalaryBankUserPage user={user} />;
+    if (page === 'Ngân hàng nhận lương') return <SalaryBankUserPage user={user} onUserUpdated={onUserUpdated} />;
     if (page === 'Hồ sơ') return <UserProfile user={user} onUserUpdated={onUserUpdated} />;
     return <UserPortal user={user} />;
   }
+  if (page === 'Thông báo') return <BankUpdateNotificationPage />;
   if (page === 'Quản lý ngân hàng nhận lương') return <SalaryBankAdminPage />;
   if (page === 'Quản lý sinh viên') return <StudentManagement />;
   if (page === 'Quản lý ca làm') return <ShiftManagement />;
@@ -888,10 +986,11 @@ const salaryBankOptions = [
   'MSB', 'SeABank', 'Eximbank', 'Nam A Bank', 'Ngân hàng khác',
 ];
 
-function SalaryBankUserPage({ user }) {
+function SalaryBankUserPage({ user, onUserUpdated }) {
   const [saved, setSaved] = useState(null);
   const [form, setForm] = useState({
     accountHolderName: user.fullName || '',
+    phone: user.phone || '',
     studentCode: user.studentCode || '',
     bankName: '',
     accountNumber: '',
@@ -921,12 +1020,14 @@ function SalaryBankUserPage({ user }) {
         setCustomBankSelected(!salaryBankOptions.includes(body.data.bankName));
         setForm({
           accountHolderName: body.data.accountHolderName,
+          phone: body.data.phone || body.phone || user.phone || '',
           studentCode: body.data.studentCode,
           bankName: body.data.bankName,
           accountNumber: body.data.accountNumber,
           bankBranch: body.data.bankBranch,
         });
       } else {
+        setForm((current) => ({ ...current, phone: body.phone || user.phone || '' }));
         setEditing(true);
       }
     }).catch((requestError) => {
@@ -968,6 +1069,7 @@ function SalaryBankUserPage({ user }) {
       setCustomBankSelected(!salaryBankOptions.includes(body.data.bankName));
       setForm({
         accountHolderName: body.data.accountHolderName,
+        phone: body.data.phone,
         studentCode: body.data.studentCode,
         bankName: body.data.bankName,
         accountNumber: body.data.accountNumber,
@@ -975,6 +1077,7 @@ function SalaryBankUserPage({ user }) {
       });
       setEditing(false);
       setShowAccountNumber(false);
+      onUserUpdated({ ...user, phone: body.data.phone });
       setSuccess('Thông tin ngân hàng nhận lương đã được cập nhật thành công.');
     } catch (requestError) {
       setError(requestError.message || 'Không thể lưu thông tin ngân hàng.');
@@ -1001,6 +1104,10 @@ function SalaryBankUserPage({ user }) {
           <label>Họ và tên chủ tài khoản
             <input name="accountHolderName" value={form.accountHolderName} onChange={updateField} maxLength={150} required autoComplete="name" />
             {fieldErrors.accountHolderName && <small className="salary-bank-field-error">{fieldErrors.accountHolderName}</small>}
+          </label>
+          <label>Số điện thoại
+            <input name="phone" type="tel" inputMode="tel" autoComplete="tel" value={form.phone} onChange={updateField} maxLength={20} pattern="(?=(?:.*[0-9]){8})[0-9+()\\s-]{8,20}" title="Nhập số điện thoại có từ 8 đến 15 chữ số; có thể dùng thêm dấu +, dấu ngoặc, khoảng trắng hoặc dấu gạch ngang." required />
+            {fieldErrors.phone && <small className="salary-bank-field-error">{fieldErrors.phone}</small>}
           </label>
           <label>Mã số sinh viên nhận lương
             <input name="studentCode" value={form.studentCode} onChange={updateField} maxLength={30} required />
@@ -1032,6 +1139,7 @@ function SalaryBankUserPage({ user }) {
             {saved && <button className="salary-bank-secondary" type="button" onClick={() => {
               setForm({
                 accountHolderName: saved.accountHolderName,
+                phone: saved.phone,
                 studentCode: saved.studentCode,
                 bankName: saved.bankName,
                 accountNumber: saved.accountNumber,
@@ -1057,6 +1165,7 @@ function SalaryBankUserPage({ user }) {
           <div className="salary-bank-status"><BadgeCheck size={17} />Đã cập nhật</div>
           <dl className="salary-bank-details">
             <div><dt>Họ và tên</dt><dd>{saved.accountHolderName}</dd></div>
+            <div><dt>Số điện thoại</dt><dd>{saved.phone || '—'}</dd></div>
             <div><dt>Mã số sinh viên</dt><dd>{saved.studentCode}</dd></div>
             <div><dt>Ngân hàng</dt><dd>{saved.bankName}</dd></div>
             <div><dt>Số tài khoản</dt><dd className="salary-bank-account-value">{showAccountNumber ? saved.accountNumber : saved.accountNumberMasked}<button type="button" aria-label={showAccountNumber ? 'Ẩn số tài khoản' : 'Hiện số tài khoản'} onClick={() => setShowAccountNumber((value) => !value)}>{showAccountNumber ? <EyeOff size={17} /> : <Eye size={17} />}</button></dd></div>
@@ -1067,6 +1176,143 @@ function SalaryBankUserPage({ user }) {
         </> : <div className="salary-bank-review-empty"><div className="salary-bank-empty-icon"><Wallet size={26} /></div><strong>Chưa có thông tin nhận lương</strong><p>Thông tin sẽ hiển thị tại đây sau khi bạn lưu thành công.</p></div>}
       </section>
     </div>}
+  </section>;
+}
+
+function BankUpdateNotificationPage() {
+  const [settings, setSettings] = useState(null);
+  const [form, setForm] = useState({
+    title: '',
+    message: '',
+    buttonLabel: '',
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savingContent, setSavingContent] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    async function loadSettings() {
+      try {
+        const token = localStorage.getItem('attendance_token');
+        const response = await fetch(`${apiUrl}/admin/bank-update-notification`, {
+          cache: 'no-store',
+          headers: { Authorization: 'Bearer ' + token },
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || !body.success || typeof body.data?.enabled !== 'boolean') {
+          throw new Error(body.message || 'Không thể tải cấu hình thông báo.');
+        }
+        if (active) {
+          setSettings(body.data);
+          setForm({
+            title: body.data.title,
+            message: body.data.message,
+            buttonLabel: body.data.buttonLabel,
+          });
+          setError('');
+        }
+      } catch (requestError) {
+        if (active) setError(requestError.message || 'Không thể tải cấu hình thông báo.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    loadSettings();
+    return () => { active = false; };
+  }, []);
+
+  async function updateSettings(payload, contentChange = false) {
+    if (!settings || saving) return;
+    setSaving(true);
+    if (contentChange) setSavingContent(true);
+    setError('');
+    setSuccess('');
+    try {
+      const token = localStorage.getItem('attendance_token');
+      const response = await fetch(`${apiUrl}/admin/bank-update-notification`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(payload),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body.success || typeof body.data?.enabled !== 'boolean') {
+        throw new Error(body.message || 'Không thể cập nhật cấu hình thông báo.');
+      }
+      setSettings(body.data);
+      setForm({
+        title: body.data.title,
+        message: body.data.message,
+        buttonLabel: body.data.buttonLabel,
+      });
+      setSuccess(contentChange ? 'Đã lưu nội dung thông báo.' : '');
+    } catch (requestError) {
+      setError(requestError.message || 'Không thể cập nhật cấu hình thông báo.');
+    } finally {
+      setSaving(false);
+      setSavingContent(false);
+    }
+  }
+
+  return <section className="salary-bank-page bank-update-admin-page">
+    <div className="salary-bank-heading">
+      <span className="section-label">QUẢN TRỊ / THÔNG BÁO</span>
+      <h2>Thông báo cập nhật ngân hàng</h2>
+      <p>Soạn nội dung popup và chọn khi nào thông báo được gửi đến người dùng.</p>
+    </div>
+    {error && <div className="salary-bank-alert error" role="alert">{error}</div>}
+    {success && <div className="salary-bank-alert success" role="status">{success}</div>}
+    <section className="salary-bank-card bank-update-settings">
+      <div className="bank-update-settings-copy">
+        <div className="bank-update-settings-heading"><Bell size={20} /><h3>Trạng thái thông báo</h3></div>
+        <p>{loading
+          ? 'Đang tải trạng thái thông báo...'
+          : settings?.enabled
+            ? 'Đang bật — popup sẽ xuất hiện cho người dùng khi vào Dashboard.'
+            : 'Đang tắt — người dùng sẽ không nhìn thấy popup.'}</p>
+      </div>
+      <div className="bank-update-toggle-wrap">
+        <button
+          className={`bank-update-toggle${settings?.enabled ? ' enabled' : ''}`}
+          type="button"
+          role="switch"
+          aria-checked={Boolean(settings?.enabled)}
+          aria-label="Bật hoặc tắt thông báo"
+          onClick={() => updateSettings({ enabled: !settings.enabled })}
+          disabled={loading || saving || !settings}
+        >
+          <span />
+        </button>
+        <strong className={settings?.enabled ? 'enabled' : ''}>
+          {loading ? '...' : saving && !savingContent ? '...' : settings?.enabled ? 'Bật' : 'Tắt'}
+        </strong>
+      </div>
+    </section>
+    <section className="salary-bank-card bank-update-editor">
+      <div className="bank-update-settings-heading"><Pencil size={19} /><h3>Nội dung hiển thị cho người dùng</h3></div>
+      {loading ? <div className="salary-bank-loading">Đang tải nội dung thông báo...</div> : <form className="bank-update-form" onSubmit={(event) => {
+        event.preventDefault();
+        updateSettings(form, true);
+      }}>
+        <label>Tiêu đề
+          <input value={form.title} maxLength={150} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} required />
+        </label>
+        <label>Nội dung
+          <textarea value={form.message} maxLength={2000} rows={5} onChange={(event) => setForm((current) => ({ ...current, message: event.target.value }))} required />
+        </label>
+        <label>Nhãn nút
+          <input value={form.buttonLabel} maxLength={60} onChange={(event) => setForm((current) => ({ ...current, buttonLabel: event.target.value }))} required />
+          <small>Nút luôn mở trang Ngân hàng nhận lương để User cập nhật thông tin.</small>
+        </label>
+        <div className="bank-update-form-actions">
+          <button className="salary-bank-primary" type="submit" disabled={saving || loading}>
+            <Save size={17} />{savingContent ? 'Đang lưu...' : 'Lưu nội dung'}
+          </button>
+        </div>
+      </form>}
+    </section>
   </section>;
 }
 

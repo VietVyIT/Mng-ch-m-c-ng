@@ -22,6 +22,7 @@ function userBankData(row, includeFullAccount = true) {
   const accountNumber = decryptAccountNumber(row.account_number_encrypted, env.bankAccountEncryptionKey);
   return {
     accountHolderName: row.account_holder_name,
+    phone: row.phone || '',
     studentCode: row.student_code,
     bankName: row.bank_name,
     accountNumber: includeFullAccount ? accountNumber : undefined,
@@ -81,12 +82,21 @@ async function getSalaryBankStats(connection) {
 userRouter.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT account_holder_name, student_code, bank_name, account_number_encrypted,
-              bank_branch, created_at, updated_at
-       FROM user_salary_bank_accounts WHERE user_id = ? LIMIT 1`,
+      `SELECT u.phone, b.account_holder_name, b.student_code, b.bank_name,
+              b.account_number_encrypted, b.bank_branch, b.created_at, b.updated_at
+       FROM users u
+       LEFT JOIN user_salary_bank_accounts b ON b.user_id = u.id
+       WHERE u.id = ? LIMIT 1`,
       [request.user.userId],
     );
-    return response.json({ success: true, data: rows[0] ? userBankData(rows[0]) : null });
+    if (!rows[0]) {
+      return response.status(404).json({ success: false, message: 'Không tìm thấy tài khoản.', errorCode: 'USER_NOT_FOUND' });
+    }
+    return response.json({
+      success: true,
+      data: rows[0].account_number_encrypted ? userBankData(rows[0]) : null,
+      phone: rows[0].phone || '',
+    });
   } catch (error) {
     return sendSalaryBankError(error, response, next);
   }
@@ -99,6 +109,13 @@ userRouter.put('/', async (request, response, next) => {
     const encryptedAccountNumber = encryptAccountNumber(input.accountNumber, env.bankAccountEncryptionKey);
     connection = await pool.getConnection();
     await connection.beginTransaction();
+    const [userRows] = await connection.execute(
+      'SELECT phone FROM users WHERE id = ? FOR UPDATE',
+      [request.user.userId],
+    );
+    if (!userRows[0]) {
+      throw new SalaryBankError('USER_NOT_FOUND', 'Không tìm thấy tài khoản.', 404);
+    }
     const [rows] = await connection.execute(
       `SELECT account_holder_name, student_code, bank_name, account_number_encrypted,
               bank_branch, created_at, updated_at
@@ -128,8 +145,16 @@ userRouter.put('/', async (request, response, next) => {
       bankName: current.bank_name,
       accountNumber: decryptAccountNumber(current.account_number_encrypted, env.bankAccountEncryptionKey),
       bankBranch: current.bank_branch,
+      phone: userRows[0].phone || '',
     } : null;
     const changedFields = changedSalaryBankFields(previous, input);
+
+    if ((userRows[0].phone || '') !== input.phone) {
+      await connection.execute(
+        'UPDATE users SET phone = ? WHERE id = ?',
+        [input.phone, request.user.userId],
+      );
+    }
 
     if (!current) {
       await connection.execute(
@@ -176,9 +201,11 @@ userRouter.put('/', async (request, response, next) => {
       );
     }
     const [savedRows] = await connection.execute(
-      `SELECT account_holder_name, student_code, bank_name, account_number_encrypted,
-              bank_branch, created_at, updated_at
-       FROM user_salary_bank_accounts WHERE user_id = ?`,
+      `SELECT u.phone, b.account_holder_name, b.student_code, b.bank_name,
+              b.account_number_encrypted, b.bank_branch, b.created_at, b.updated_at
+       FROM user_salary_bank_accounts b
+       JOIN users u ON u.id = b.user_id
+       WHERE b.user_id = ?`,
       [request.user.userId],
     );
     await connection.commit();

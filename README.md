@@ -131,6 +131,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 `BANK_ACCOUNT_ENCRYPTION_KEY` cần có khi sử dụng tính năng ngân hàng nhận lương. Hãy lưu khóa an toàn và giữ nguyên khóa trong suốt vòng đời dữ liệu đã mã hóa; mất hoặc thay khóa sẽ khiến dữ liệu cũ không thể giải mã.
 
+Trong trang **Thông báo** riêng của Admin, quản trị viên có thể soạn tiêu đề, nội dung, nhãn nút và bật/tắt popup nhắc User cập nhật ngân hàng. Cấu hình được lưu bền vững trong bảng `bank_update_notification_settings` (migration `013_bank_update_notification_settings.sql` và `014_editable_bank_update_notification.sql`; ứng dụng cũng tự khởi tạo/cập nhật bảng khi khởi động). Nút popup luôn mở trang ngân hàng nhận lương. User cập nhật số điện thoại tại trang này; số được lưu vào cột `users.phone` hiện có. Đóng popup chỉ ẩn đến khi tải lại trang hoặc đăng nhập lại; tắt thông báo sẽ ẩn popup cho toàn bộ User.
+
 SMTP trong `server/.env.example` là tùy chọn đối với việc khởi chạy ứng dụng, nhưng cần thiết cho các luồng gửi OTP email như đăng ký và khôi phục mật khẩu. Không đưa thông tin SMTP hoặc bất kỳ secret thật nào vào Git.
 
 ### 4. Khởi chạy ứng dụng

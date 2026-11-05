@@ -4007,10 +4007,281 @@ body.modal-open {
   color: #008080;
 }
 
+.bank-update-modal-backdrop {
+  align-items: center;
+  background: rgba(15, 23, 42, 0.48);
+  backdrop-filter: blur(2px);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+  position: fixed;
+  z-index: 2000;
+}
+
+.bank-update-modal {
+  background: #fff;
+  border: 1px solid #e6f3eb;
+  border-radius: 22px;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+  color: #20352d;
+  margin: auto;
+  max-height: min(90vh, 720px);
+  max-height: min(90dvh, 720px);
+  max-width: 500px;
+  overflow-y: auto;
+  padding: 38px 42px 36px;
+  position: relative;
+  text-align: center;
+  width: 100%;
+}
+
+.bank-update-modal-close {
+  align-items: center;
+  background: #f3f7f4;
+  border: 0;
+  border-radius: 50%;
+  color: #64746a;
+  cursor: pointer;
+  display: inline-flex;
+  height: 40px;
+  justify-content: center;
+  position: absolute;
+  right: 16px;
+  top: 16px;
+  transition: background .2s ease, color .2s ease;
+  width: 40px;
+}
+
+.bank-update-modal-close:hover {
+  background: #e8f2eb;
+  color: #315a40;
+}
+
+.bank-update-modal-icon {
+  align-items: center;
+  background: #eaf5ec;
+  border: 1px solid #d5e9d8;
+  border-radius: 22px;
+  color: #3e8052;
+  display: inline-flex;
+  height: 76px;
+  justify-content: center;
+  margin: 4px auto 20px;
+  width: 76px;
+}
+
+.bank-update-modal-eyebrow {
+  color: #61806a;
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  margin-bottom: 10px;
+}
+
+.bank-update-modal h2 {
+  color: #263d2e;
+  font-size: clamp(21px, 4vw, 27px);
+  line-height: 1.3;
+  margin: 0 auto 12px;
+  max-width: 390px;
+}
+
+.bank-update-modal p {
+  color: #66776c;
+  font-size: 14px;
+  line-height: 1.75;
+  margin: 0 auto 26px;
+  max-width: 400px;
+}
+
+.bank-update-modal-action {
+  align-items: center;
+  background: #4f8d5d;
+  border: 1px solid #4f8d5d;
+  border-radius: 11px;
+  box-shadow: 0 6px 15px rgba(79, 141, 93, .2);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 700;
+  gap: 10px;
+  justify-content: center;
+  min-height: 50px;
+  padding: 0 24px;
+  transition: background .2s ease, transform .2s ease;
+  width: 100%;
+}
+
+.bank-update-modal-action:hover {
+  background: #3d774b;
+  transform: translateY(-1px);
+}
+
+.bank-update-config-error {
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  border-radius: 10px;
+  color: #9a3412;
+  font-size: 13px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 16px;
+  position: fixed;
+  right: 16px;
+  top: max(16px, env(safe-area-inset-top));
+  z-index: 2100;
+}
+
 .salary-bank-page {
   color: #172b36;
   margin: 0 auto;
   max-width: 1320px;
+}
+
+.bank-update-settings {
+  align-items: center;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.bank-update-admin-page {
+  padding-bottom: 24px;
+}
+
+.bank-update-settings-copy {
+  min-width: 0;
+}
+
+.bank-update-settings-heading {
+  align-items: center;
+  color: #3e8052;
+  display: flex;
+  gap: 10px;
+}
+
+.bank-update-settings-heading h3 {
+  color: #172b36;
+  font-size: 15px;
+  margin: 0;
+}
+
+.bank-update-settings p {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 7px 0 0 30px;
+}
+
+.bank-update-toggle-wrap {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 9px;
+}
+
+.bank-update-toggle {
+  background: #cbd5e1;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  cursor: pointer;
+  display: block;
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 3px;
+  transition: background .2s ease, color .2s ease;
+  width: 46px;
+}
+
+.bank-update-toggle span {
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px #0f172a30;
+  display: block;
+  height: 18px;
+  transition: transform .2s ease;
+  width: 18px;
+}
+
+.bank-update-toggle.enabled {
+  background: #4f9b61;
+  border-color: #4f9b61;
+}
+
+.bank-update-toggle.enabled span {
+  transform: translateX(20px);
+}
+
+.bank-update-toggle:disabled {
+  cursor: not-allowed;
+  opacity: .7;
+}
+
+.bank-update-toggle-wrap strong {
+  color: #64748b;
+  font-size: 12px;
+  min-width: 26px;
+}
+
+.bank-update-toggle-wrap strong.enabled {
+  color: #357044;
+}
+
+.bank-update-editor {
+  margin-top: 18px;
+}
+
+.bank-update-form {
+  display: grid;
+  gap: 17px;
+  margin-top: 22px;
+  max-width: 780px;
+}
+
+.bank-update-form label {
+  color: #334155;
+  display: grid;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 7px;
+}
+
+.bank-update-form input,
+.bank-update-form textarea {
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  color: #172b36;
+  font: inherit;
+  font-size: 13px;
+  min-height: 44px;
+  min-width: 0;
+  padding: 11px 12px;
+  resize: vertical;
+  width: 100%;
+}
+
+.bank-update-form input:focus,
+.bank-update-form textarea:focus {
+  border-color: #008080;
+  box-shadow: 0 0 0 3px #00808020;
+  outline: none;
+}
+
+.bank-update-form label > small {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.bank-update-form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .salary-bank-heading {
@@ -4558,6 +4829,49 @@ body.modal-open {
 }
 
 @media (max-width: 680px) {
+  .bank-update-modal {
+    border-radius: 18px;
+    padding: 34px 22px 24px;
+  }
+
+  .bank-update-modal-icon {
+    height: 66px;
+    width: 66px;
+  }
+
+  .bank-update-modal p {
+    font-size: 13px;
+  }
+
+  .bank-update-settings {
+    align-items: flex-start;
+    padding: 17px;
+  }
+
+  .bank-update-settings-copy {
+    flex: 1;
+  }
+
+  .bank-update-settings-heading h3 {
+    font-size: 14px;
+  }
+
+  .bank-update-settings p {
+    margin-left: 0;
+  }
+
+  .bank-update-toggle-wrap {
+    gap: 6px;
+  }
+
+  .bank-update-editor {
+    padding: 17px;
+  }
+
+  .bank-update-form-actions .salary-bank-primary {
+    width: 100%;
+  }
+
   .salary-bank-heading h2 {
     font-size: 21px;
     line-height: 1.35;

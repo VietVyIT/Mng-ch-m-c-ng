@@ -23,9 +23,20 @@ export function normalizeSalaryBankInput(input) {
     ? input.accountNumber.trim().replace(/\s+/g, '')
     : '';
   const bankBranch = cleanText(input?.bankBranch);
+  const phone = cleanText(input?.phone);
+  const phoneDigits = phone.replace(/\D/g, '');
 
   if (!accountHolderName) errors.accountHolderName = 'Vui lòng nhập họ và tên chủ tài khoản.';
   else if (accountHolderName.length > 150) errors.accountHolderName = 'Họ và tên không được vượt quá 150 ký tự.';
+  if (!phone) errors.phone = 'Vui lòng nhập số điện thoại.';
+  else if (
+    phone.length > 30
+    || !/^[0-9+()\-\s]{8,20}$/.test(phone)
+    || phoneDigits.length < 8
+    || phoneDigits.length > 15
+  ) {
+    errors.phone = 'Số điện thoại không hợp lệ.';
+  }
   if (!studentCode) errors.studentCode = 'Vui lòng nhập mã số sinh viên nhận lương.';
   else if (studentCode.length > 30) errors.studentCode = 'Mã số sinh viên không được vượt quá 30 ký tự.';
   if (!bankName) errors.bankName = 'Vui lòng chọn hoặc nhập tên ngân hàng.';
@@ -41,7 +52,7 @@ export function normalizeSalaryBankInput(input) {
     throw new SalaryBankError('VALIDATION_ERROR', 'Vui lòng kiểm tra lại thông tin ngân hàng.', 400, errors);
   }
 
-  return { accountHolderName, studentCode, bankName, accountNumber, bankBranch };
+  return { accountHolderName, phone, studentCode, bankName, accountNumber, bankBranch };
 }
 
 function encryptionKey(key) {
