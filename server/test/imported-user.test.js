@@ -1,49 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createImportedUsername,
   ImportedUserIdentityError,
   resolveImportedUser,
 } from '../src/utils/imported-user.js';
 
-test('a username collision with a different student code creates a distinct stable username', () => {
+test('a username collision with a different full name is not treated as an identity match', () => {
   const existingUser = {
     id: 1,
+    role: 'USER',
+    full_name: 'Nguyễn Văn Khác',
     student_code: 'SV001',
     username: 'Phạm Gia Minh',
     username_match: 1,
     student_code_match: 0,
     email_match: 0,
   };
-  const resolved = resolveImportedUser([existingUser], 'SV002', 'minh2@example.com');
-
-  assert.equal(resolved, null);
-  const username = createImportedUsername('Phạm Gia Minh', 'SV002', 'minh2@example.com');
-  assert.notEqual(username, existingUser.username);
-  assert.equal(username, createImportedUsername('Phạm Gia Minh', 'SV002', 'minh2@example.com'));
-});
-
-test('different students with the same full name receive distinct usernames', () => {
-  const firstUsername = createImportedUsername('Phạm Gia Minh', 'SV001', '');
-  const secondUsername = createImportedUsername('Phạm Gia Minh', 'SV002', '');
-
-  assert.notEqual(firstUsername, secondUsername);
-  assert.ok(firstUsername.length <= 100);
-  assert.ok(secondUsername.length <= 100);
-});
-
-test('a collided-name account resolves to the same user on repeated imports', () => {
-  const username = createImportedUsername('Phạm Gia Minh', 'SV002', 'minh2@example.com');
-  const existingUser = {
-    id: 42,
-    student_code: 'SV002',
-    username,
-    student_code_match: 1,
-    email_match: 0,
-  };
-
-  assert.equal(resolveImportedUser([existingUser], 'SV002', 'minh2@example.com'), existingUser);
-  assert.equal(resolveImportedUser([existingUser], 'SV002', 'minh2@example.com'), existingUser);
+  assert.equal(resolveImportedUser([existingUser], '', '', 'Phạm Gia Minh'), null);
 });
 
 test('conflicting email and student code are rejected instead of updating either account', () => {
@@ -73,85 +46,63 @@ test('a username collision on an admin account is never treated as a user match'
   assert.equal(resolveImportedUser([admin], 'SV002', 'minh2@example.com'), null);
 });
 
-test('a name-only import updates an existing username account without a student code', () => {
+test('a name-only import updates an existing full-name match without a student code', () => {
   const existingUser = {
     id: 21,
     role: 'USER',
     student_code: null,
     username: 'Phạm Gia Minh',
-    username_match: 1,
+    full_name_match: 1,
   };
 
   assert.equal(resolveImportedUser([existingUser], '', ''), existingUser);
 });
 
-test('a name-only import does not update an account with a different stored student code', () => {
+test('a same-name import reuses the account even when the imported MSSV differs', () => {
   const existingUser = {
     id: 22,
     role: 'USER',
     student_code: 'SV001',
     username: 'Phạm Gia Minh',
-    username_match: 1,
+    full_name_match: 1,
   };
 
-  assert.equal(resolveImportedUser([existingUser], '', ''), null);
+  assert.equal(resolveImportedUser([existingUser], 'SV002', '', 'Phạm Gia Minh'), existingUser);
 });
 
-test('a name-only account gets a deterministic username when that name belongs to another account', () => {
-  const existingStudent = {
-    id: 23,
+test('a name-only import updates the unique matching account even when its MSSV is present', () => {
+  const existingUser = {
+    id: 22,
     role: 'USER',
     student_code: 'SV001',
-    username: 'Phạm Gia Minh',
-    username_match: 1,
-  };
-  const nameOnlyUsername = createImportedUsername('Phạm Gia Minh', '', '');
-  const resolved = resolveImportedUser([existingStudent], '', '');
-  const nameOnlyUser = {
-    id: 24,
-    role: 'USER',
-    student_code: null,
-    username: nameOnlyUsername,
-    username_match: 1,
+    username: 'pham-gia-minh',
+    full_name_match: 1,
   };
 
-  assert.equal(resolved, null);
-  assert.notEqual(nameOnlyUsername, existingStudent.username);
-  assert.equal(nameOnlyUsername, createImportedUsername('Phạm Gia Minh', '', ''));
-  assert.equal(resolveImportedUser([existingStudent, nameOnlyUser], '', ''), nameOnlyUser);
+  assert.equal(resolveImportedUser([existingUser], '', '', 'Phạm Gia Minh'), existingUser);
 });
 
-test('a username collision on an admin account is not treated as a name-only user match', () => {
-  const admin = {
-    id: 1,
-    role: 'ADMIN',
-    student_code: null,
-    username: 'Phạm Gia Minh',
-    username_match: 1,
-  };
+test('a same-name import chooses the stable oldest account when duplicate accounts exist', () => {
+  const canonicalUser = { id: 22, role: 'USER', student_code: 'SV001', full_name_match: 1 };
+  const duplicateUser = { id: 23, role: 'USER', student_code: 'SV002', full_name_match: 1 };
 
-  assert.equal(resolveImportedUser([admin], '', ''), null);
+  assert.equal(resolveImportedUser([duplicateUser, canonicalUser], 'SV003', '', 'Phạm Gia Minh'), canonicalUser);
 });
 
-test('new name-only accounts use a stable username', () => {
-  const firstUsername = createImportedUsername('Phạm Gia Minh', '', '');
-  const secondUsername = createImportedUsername('Phạm Gia Minh', '', '');
+test('duplicate same-name accounts prefer the account matching the Excel MSSV', () => {
+  const firstUser = { id: 22, role: 'USER', student_code: 'SV001', full_name_match: 1 };
+  const matchingUser = { id: 23, role: 'USER', student_code: 'SV002', student_code_match: 1, full_name_match: 1 };
 
-  assert.equal(firstUsername, secondUsername);
-  assert.ok(firstUsername.length <= 100);
+  assert.equal(resolveImportedUser([firstUser, matchingUser], 'SV002', '', 'Phạm Gia Minh'), matchingUser);
+});
+
+test('same full name takes precedence over mismatched identifiers on another account', () => {
+  const sameNameUser = { id: 22, role: 'USER', student_code: 'SV001', full_name_match: 1 };
+  const identifierUser = { id: 23, role: 'USER', student_code: 'SV002', student_code_match: 1 };
+
+  assert.equal(resolveImportedUser([identifierUser, sameNameUser], 'SV002', '', 'Phạm Gia Minh'), sameNameUser);
 });
 
 test('users with no stable identifiers can be created as name-only imports', () => {
-  assert.equal(resolveImportedUser([], '', ''), null);
-});
-
-test('multiple name-only accounts with the same username are rejected', () => {
-  assert.throws(
-    () => resolveImportedUser([
-      { id: 1, role: 'USER', student_code: null, username_match: 1 },
-      { id: 2, role: 'USER', student_code: null, username_match: 1 },
-    ], '', ''),
-    (error) => error instanceof ImportedUserIdentityError
-      && error.code === 'AMBIGUOUS_USER_IDENTITY',
-  );
+  assert.equal(resolveImportedUser([], '', '', 'Phạm Gia Minh'), null);
 });

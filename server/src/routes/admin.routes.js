@@ -6,7 +6,7 @@ import { DEFAULT_SHIFTS } from '../config/shifts.js';
 import { createNotification } from '../utils/notifications.js';
 import { parseFaceEmbedding } from '../utils/face.js';
 import { cleanupExpiredAttendancePhotos } from '../utils/attendance-photo-cleanup.js';
-import { createImportedUsername, ImportedUserIdentityError, resolveImportedUser } from '../utils/imported-user.js';
+import { ImportedUserIdentityError, resolveImportedUser } from '../utils/imported-user.js';
 import { updateShiftHandler } from './shifts.routes.js';
 
 const router = Router();
@@ -78,7 +78,7 @@ router.post('/attendance/import-excel', async (request, response, next) => {
     const unmatched = [];
     const userIds = new Map();
     let noStudentCodeUsers = 0;
-    const noStudentCodePasswordHash = await bcrypt.hash('user123', 12);
+    const importedDefaultPasswordHash = await bcrypt.hash('user123', 12);
     for (const member of members) {
       const name = typeof member.userName === 'string' ? member.userName.trim().replace(/\s+/g, ' ') : '';
       const mssv = typeof member.userMSSV === 'string' ? member.userMSSV.trim() : '';
@@ -90,52 +90,62 @@ router.post('/attendance/import-excel', async (request, response, next) => {
       if (!name) {
         throw new ImportedUserIdentityError('MISSING_USER_NAME', 'Mỗi thành viên import phải có họ và tên.');
       }
+      if (name.length > 100) {
+        throw new ImportedUserIdentityError('USERNAME_TOO_LONG', 'Họ tên trong file Excel vượt quá 100 ký tự nên không thể dùng nguyên văn làm tên đăng nhập.');
+      }
       if (!mssv) noStudentCodeUsers += 1;
-      const nameOnlyUsername = !mssv && !email ? createImportedUsername(name, '', '') : '';
       const [existing] = await connection.execute(
-        `SELECT id, role, student_code, email,
+        `SELECT id, role, student_code, email, username,
                 (? <> '' AND student_code = ?) AS student_code_match,
                 (? <> '' AND LOWER(email) = ?) AS email_match,
-                (username = ? OR (? <> '' AND username = ?)) AS username_match
+                (LOWER(username) = LOWER(?)) AS username_match,
+                (LOWER(full_name) = LOWER(?)) AS full_name_match
          FROM users
          WHERE ((? <> '' AND student_code = ?)
              OR (? <> '' AND LOWER(email) = LOWER(?))
-             OR username = ?
-             OR (? <> '' AND username = ?))`,
+             OR LOWER(username) = LOWER(?)
+             OR LOWER(full_name) = LOWER(?))`,
         [
           mssv, mssv, email, email,
-          name.slice(0, 100), nameOnlyUsername, nameOnlyUsername,
+          name, name,
           mssv, mssv, email, email,
-          name.slice(0, 100), nameOnlyUsername, nameOnlyUsername,
+          name, name,
         ],
       );
-      const matchedUser = resolveImportedUser(existing, mssv, email);
+      const matchedUser = resolveImportedUser(existing, mssv, email, name);
       let userId = matchedUser?.id;
       if (userId) {
+        const [usernameMatches] = await connection.execute(
+          'SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id <> ? LIMIT 1',
+          [name, userId],
+        );
+        if (usernameMatches.length) {
+          throw new ImportedUserIdentityError(
+            'USERNAME_CONFLICT',
+            `Tên đăng nhập "${name}" đang thuộc tài khoản khác; không thể nhập nếu vẫn giữ nguyên tên trong Excel.`,
+            409,
+          );
+        }
         await connection.execute(
           `UPDATE users SET full_name = ?, student_code = COALESCE(NULLIF(?, ''), student_code),
-           email = COALESCE(NULLIF(?, ''), email), phone = COALESCE(NULLIF(?, ''), phone),
+           email = COALESCE(NULLIF(?, ''), email), phone = COALESCE(NULLIF(?, ''), phone), username = ?,
            total_work_days = COALESCE(?, total_work_days), total_work_hours = ? WHERE id = ?`,
-          [name, mssv, email, phone, totalWorkDaysValue, totalWorkHours, userId],
+          [name, mssv, email, phone, name, totalWorkDaysValue, totalWorkHours, userId],
         );
       } else {
-        let username = name.slice(0, 100);
         const usernameCollision = existing.some((candidate) => Boolean(candidate.username_match));
-        if (usernameCollision || name.length > 100 || (!mssv && !email)) {
-          for (let attempt = 0; ; attempt += 1) {
-            username = createImportedUsername(name, mssv, email, attempt);
-            const [usernameMatches] = await connection.execute(
-              'SELECT id FROM users WHERE username = ? LIMIT 1',
-              [username],
-            );
-            if (!usernameMatches.length) break;
-          }
+        if (usernameCollision) {
+          throw new ImportedUserIdentityError(
+            'USERNAME_CONFLICT',
+            `Tên đăng nhập "${name}" đang thuộc tài khoản khác; không thể nhập nếu vẫn giữ nguyên tên trong Excel.`,
+            409,
+          );
         }
         const [created] = await connection.execute(
           `INSERT INTO users
            (full_name, student_code, email, phone, username, password_hash, role, must_change_password, total_work_days, total_work_hours)
            VALUES (?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''), ?, ?, 'USER', TRUE, ?, ?)`,
-          [name, mssv, email, phone, username, mssv ? await bcrypt.hash(mssv, 12) : noStudentCodePasswordHash, totalWorkDaysValue ?? 0, totalWorkHours],
+          [name, mssv, email, phone, name, importedDefaultPasswordHash, totalWorkDaysValue ?? 0, totalWorkHours],
         );
         userId = created.insertId;
       }

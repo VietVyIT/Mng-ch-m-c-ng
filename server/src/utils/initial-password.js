@@ -6,8 +6,7 @@ export function matchesInitialPassword(password, user) {
   }
 
   const studentCode = user.student_code?.trim();
-  const initialPasswords = studentCode && studentCode !== 'Chưa có MSSV'
-    ? [studentCode]
-    : ['user123'];
+  const initialPasswords = ['user123'];
+  if (studentCode && studentCode !== 'Chưa có MSSV') initialPasswords.push(studentCode);
   return initialPasswords.includes(password);
 }

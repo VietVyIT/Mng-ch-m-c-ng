@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { matchesInitialPassword } from '../src/utils/initial-password.js';
 
-test('user with an MSSV can use only that code as their initial password', () => {
+test('imported user with an MSSV can use user123 or the MSSV as the initial password', () => {
   const importedUser = {
     role: 'USER',
     student_code: 'SV001',
@@ -10,7 +10,7 @@ test('user with an MSSV can use only that code as their initial password', () =>
   };
 
   assert.equal(matchesInitialPassword('SV001', importedUser), true);
-  assert.equal(matchesInitialPassword('user123', importedUser), false);
+  assert.equal(matchesInitialPassword('user123', importedUser), true);
   assert.equal(matchesInitialPassword('user123@', importedUser), false);
 });
 

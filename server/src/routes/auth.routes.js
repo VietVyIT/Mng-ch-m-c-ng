@@ -79,8 +79,19 @@ router.post('/login', async (request, response, next) => {
           OR (student_code IS NOT NULL AND LOWER(student_code) = LOWER(?))
           OR (email IS NOT NULL AND LOWER(email) = LOWER(?))
           OR (phone IS NOT NULL AND (phone = ? OR REPLACE(REPLACE(phone, ' ', ''), '-', '') = ?))
+       ORDER BY CASE
+          WHEN LOWER(username) = LOWER(?) THEN 0
+          WHEN student_code IS NOT NULL AND LOWER(student_code) = LOWER(?) THEN 1
+          WHEN LOWER(full_name) = LOWER(?) THEN 2
+          WHEN email IS NOT NULL AND LOWER(email) = LOWER(?) THEN 3
+          ELSE 4
+       END, id ASC
        LIMIT 1`,
-      [trimmedUser, trimmedUser, trimmedUser, trimmedUser, trimmedUser, trimmedUser.replace(/\s|-/g, '')],
+      [
+        trimmedUser, trimmedUser, trimmedUser, trimmedUser,
+        trimmedUser, trimmedUser.replace(/\s|-/g, ''),
+        trimmedUser, trimmedUser, trimmedUser, trimmedUser,
+      ],
     );
     const user = rows[0];
 
