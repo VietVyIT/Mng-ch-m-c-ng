@@ -5,6 +5,7 @@ import { authenticate } from '../middlewares/auth.middleware.js';
 import { canCheckOutAt, getShiftAttendanceState } from '../utils/attendance-window.js';
 import { averageEmbeddings, faceDistance, parseFaceEmbedding, validateEmbedding } from '../utils/face.js';
 import { notifyAdministrators } from '../utils/notifications.js';
+import { deduplicateAttendanceHistory } from '../utils/attendance-history.js';
 
 const router = express.Router();
 
@@ -491,7 +492,7 @@ router.get('/my', authenticate, async (req, res) => {
        LIMIT 1000`,
       [req.user.userId, req.user.userId, req.user.userId]
     );
-    return res.json({ success: true, data: rows });
+    return res.json({ success: true, data: deduplicateAttendanceHistory(rows) });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }

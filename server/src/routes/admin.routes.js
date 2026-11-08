@@ -7,6 +7,7 @@ import { createNotification } from '../utils/notifications.js';
 import { parseFaceEmbedding } from '../utils/face.js';
 import { cleanupExpiredAttendancePhotos } from '../utils/attendance-photo-cleanup.js';
 import { ImportedUserIdentityError, resolveImportedUser } from '../utils/imported-user.js';
+import { deduplicateAttendanceHistory } from '../utils/attendance-history.js';
 import { updateShiftHandler } from './shifts.routes.js';
 
 const router = Router();
@@ -258,10 +259,10 @@ router.get('/imported-attendance/users/:userId', async (request, response, next)
           ...user,
           face_registered: Boolean(parseFaceEmbedding(faceEmbedding)),
         },
-        records: [
+        records: deduplicateAttendanceHistory([
           ...records.map((record) => ({ ...record, source: 'Excel Import' })),
           ...cameraRecords.map((record) => ({ ...record, source: 'Camera', imported_from_excel: false })),
-        ].sort((a, b) => new Date(b.attendance_date) - new Date(a.attendance_date)),
+        ]),
       },
     });
   } catch (error) {
@@ -273,9 +274,11 @@ router.delete('/imported-attendance/records/:recordId', async (request, response
   const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : '';
   const connection = await pool.getConnection();
   try {
+    await ensureAttendanceLogReviewColumns(connection);
+    await ensureImportedAttendanceTable(connection);
     await connection.beginTransaction();
     const [rows] = await connection.execute(
-      `SELECT r.id, r.user_id, r.attendance_date, r.shift_name, u.full_name
+      `SELECT r.id, r.user_id, r.attendance_date, r.shift_code, r.shift_name, u.full_name
        FROM imported_attendance_records r JOIN users u ON u.id = r.user_id
        WHERE r.id = ? FOR UPDATE`,
       [request.params.recordId],
@@ -285,8 +288,17 @@ router.delete('/imported-attendance/records/:recordId', async (request, response
       return response.status(404).json({ success: false, message: 'Không tìm thấy ca chấm công.' });
     }
     const record = rows[0];
+    const hasOtherShift = await hasOtherCompletedShift(
+      connection,
+      record.user_id,
+      record.attendance_date,
+      record.shift_code,
+      { importedRecordId: record.id },
+    );
     await connection.execute('DELETE FROM imported_attendance_records WHERE id = ?', [record.id]);
-    await connection.execute('UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0) WHERE id = ?', [record.user_id]);
+    if (!hasOtherShift) {
+      await connection.execute('UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0) WHERE id = ?', [record.user_id]);
+    }
     const dateInfo = `${record.shift_name} - Ngày ${new Date(record.attendance_date).toLocaleDateString('vi-VN')}`;
     await createNotification(connection, {
       recipientId: record.user_id,
@@ -1007,6 +1019,8 @@ router.delete('/attendance-logs/:attendanceId', async (request, response, next) 
   const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : '';
   const connection = await pool.getConnection();
   try {
+    await ensureAttendanceLogReviewColumns(connection);
+    await ensureImportedAttendanceTable(connection);
     await connection.beginTransaction();
     const [rows] = await connection.execute(
       `SELECT a.*, u.id AS user_id
@@ -1023,7 +1037,8 @@ router.delete('/attendance-logs/:attendanceId', async (request, response, next) 
       await connection.rollback();
       return response.status(404).json({ success: false, message: 'Không tìm thấy bản ghi chấm công.' });
     }
-    if (record.status === 'APPROVED') {
+    if (record.status === 'APPROVED'
+      && !await hasOtherCompletedShift(connection, record.user_id, record.work_date, record.shift, { legacyRecordId: record.id })) {
       await connection.execute(
         'UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0) WHERE id = ?',
         [record.user_id],
@@ -1073,6 +1088,8 @@ router.delete('/attendance/:attendanceId', async (request, response, next) => {
   const reason = typeof request.body?.reason === 'string' ? request.body.reason.trim().slice(0, 500) : null;
   const connection = await pool.getConnection();
   try {
+    await ensureAttendanceLogReviewColumns(connection);
+    await ensureImportedAttendanceTable(connection);
     await connection.beginTransaction();
     const [rows] = await connection.execute(
       `SELECT a.*, u.id AS user_id
@@ -1099,7 +1116,14 @@ router.delete('/attendance/:attendanceId', async (request, response, next) => {
       dateInfo,
       reason,
     });
-    if (evt.status === 'APPROVED') {
+    if (evt.status === 'APPROVED'
+      && !await hasOtherCompletedShift(
+        connection,
+        evt.user_id,
+        evt.attendance_date,
+        evt.shift_code || evt.shift_name,
+        { attendanceId: evt.id },
+      )) {
       await connection.execute(
         `UPDATE users SET total_work_days = GREATEST(total_work_days - 1, 0)
          WHERE id = ?`,
@@ -1121,6 +1145,66 @@ router.delete('/attendance/:attendanceId', async (request, response, next) => {
     connection.release();
   }
 });
+
+async function hasOtherCompletedShift(connection, userId, attendanceDate, shiftCode, {
+  legacyRecordId = null,
+  attendanceId = null,
+  importedRecordId = null,
+} = {}) {
+  const [legacyRows] = await connection.execute(
+    `SELECT 1
+     FROM attendance_logs a
+     JOIN users u
+       ON a.mssv COLLATE utf8mb4_unicode_ci = u.username COLLATE utf8mb4_unicode_ci
+       OR (u.student_code IS NOT NULL
+           AND a.mssv COLLATE utf8mb4_unicode_ci = u.student_code COLLATE utf8mb4_unicode_ci)
+     WHERE u.id = ? AND a.work_date = ?
+       AND CASE UPPER(REPLACE(TRIM(a.shift), ' ', ''))
+         WHEN 'MORNING' THEN 'MORNING' WHEN 'CASÁNG' THEN 'MORNING' WHEN 'CASANG' THEN 'MORNING'
+         WHEN 'AFTERNOON' THEN 'AFTERNOON' WHEN 'CACHIỀU' THEN 'AFTERNOON' WHEN 'CACHIEU' THEN 'AFTERNOON'
+         WHEN 'EVENING' THEN 'EVENING' WHEN 'CATỐI' THEN 'EVENING' WHEN 'CATOI' THEN 'EVENING'
+         ELSE UPPER(REPLACE(TRIM(a.shift), ' ', ''))
+       END = ?
+       AND a.id <> COALESCE(?, 0)
+       AND a.check_in_time IS NOT NULL AND a.check_out_time IS NOT NULL
+       AND a.status = 'APPROVED'
+       AND a.check_in_status = 'APPROVED' AND a.check_out_status = 'APPROVED'
+     LIMIT 1`,
+    [userId, attendanceDate, shiftCode, legacyRecordId],
+  );
+  if (legacyRows.length) return true;
+
+  const [cameraRows] = await connection.execute(
+    `SELECT 1 FROM attendance
+     WHERE user_id = ? AND attendance_date = ?
+       AND CASE UPPER(REPLACE(TRIM(COALESCE(shift_code, shift_name)), ' ', ''))
+         WHEN 'MORNING' THEN 'MORNING' WHEN 'CASÁNG' THEN 'MORNING' WHEN 'CASANG' THEN 'MORNING'
+         WHEN 'AFTERNOON' THEN 'AFTERNOON' WHEN 'CACHIỀU' THEN 'AFTERNOON' WHEN 'CACHIEU' THEN 'AFTERNOON'
+         WHEN 'EVENING' THEN 'EVENING' WHEN 'CATỐI' THEN 'EVENING' WHEN 'CATOI' THEN 'EVENING'
+         ELSE UPPER(REPLACE(TRIM(COALESCE(shift_code, shift_name)), ' ', ''))
+       END = ?
+       AND id <> COALESCE(?, 0)
+       AND check_in IS NOT NULL AND check_out IS NOT NULL AND status = 'APPROVED'
+     LIMIT 1`,
+    [userId, attendanceDate, shiftCode, attendanceId],
+  );
+  if (cameraRows.length) return true;
+
+  const [importRows] = await connection.execute(
+    `SELECT 1 FROM imported_attendance_records
+     WHERE user_id = ? AND attendance_date = ?
+       AND CASE UPPER(REPLACE(TRIM(shift_code), ' ', ''))
+         WHEN 'MORNING' THEN 'MORNING' WHEN 'CASÁNG' THEN 'MORNING' WHEN 'CASANG' THEN 'MORNING'
+         WHEN 'AFTERNOON' THEN 'AFTERNOON' WHEN 'CACHIỀU' THEN 'AFTERNOON' WHEN 'CACHIEU' THEN 'AFTERNOON'
+         WHEN 'EVENING' THEN 'EVENING' WHEN 'CATỐI' THEN 'EVENING' WHEN 'CATOI' THEN 'EVENING'
+         ELSE UPPER(REPLACE(TRIM(shift_code), ' ', ''))
+       END = ?
+         AND id <> COALESCE(?, 0)
+       LIMIT 1`,
+    [userId, attendanceDate, shiftCode, importedRecordId],
+  );
+  return importRows.length > 0;
+}
 
 async function applyApproval(connection, requestKey, status, reason = null, adminUserId) {
   if (requestKey.startsWith('legacy:')) {
@@ -1155,7 +1239,8 @@ async function applyApproval(connection, requestKey, status, reason = null, admi
       : checkInStatus === 'REJECTED' || checkOutStatus === 'REJECTED' ? 'REJECTED'
         : 'PENDING';
     await connection.execute('UPDATE attendance_logs SET status = ? WHERE id = ?', [aggregateStatus, id]);
-    if (evt.user_id && isCompleted && !wasCompleted) {
+    if (evt.user_id && isCompleted && !wasCompleted
+      && !await hasOtherCompletedShift(connection, evt.user_id, evt.work_date, evt.shift, { legacyRecordId: evt.id })) {
       await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [evt.user_id]);
     }
     if (evt.user_id) {
@@ -1178,7 +1263,8 @@ async function applyApproval(connection, requestKey, status, reason = null, admi
   if (requestKey.startsWith('event:')) {
     const id = requestKey.slice('event:'.length);
     const [rows] = await connection.execute(
-      `SELECT e.*, a.status AS attendance_status, a.attendance_date, a.shift_name,
+      `SELECT e.*, a.status AS attendance_status, a.attendance_date, a.shift_code, a.shift_name,
+              a.check_in, a.check_out,
               u.id AS user_id, u.total_work_days
        FROM attendance_events e
        JOIN attendance a ON a.id = e.attendance_id
@@ -1195,16 +1281,26 @@ async function applyApproval(connection, requestKey, status, reason = null, admi
     const [eventStatuses] = await connection.execute(
       `SELECT COUNT(*) AS total,
               SUM(status = 'APPROVED') AS approved,
-              SUM(status = 'REJECTED') AS rejected
+              SUM(status = 'REJECTED') AS rejected,
+              SUM(event_type = 'CHECK_IN' AND status = 'APPROVED') AS approved_check_ins,
+              SUM(event_type = 'CHECK_OUT' AND status = 'APPROVED') AS approved_check_outs
        FROM attendance_events WHERE attendance_id = ?`,
       [evt.attendance_id],
     );
-    const fullyApproved = Number(eventStatuses[0].total) >= 2
-      && Number(eventStatuses[0].approved) >= 2;
+    const fullyApproved = Boolean(evt.check_in && evt.check_out)
+      && Number(eventStatuses[0].approved_check_ins) >= 1
+      && Number(eventStatuses[0].approved_check_outs) >= 1;
     const aggregateStatus = fullyApproved ? 'APPROVED'
       : Number(eventStatuses[0].rejected) > 0 ? 'REJECTED' : 'PENDING';
     await connection.execute('UPDATE attendance SET status = ? WHERE id = ?', [aggregateStatus, evt.attendance_id]);
-    if (fullyApproved && evt.attendance_status !== 'APPROVED') {
+    if (fullyApproved && evt.attendance_status !== 'APPROVED'
+      && !await hasOtherCompletedShift(
+        connection,
+        evt.user_id,
+        evt.attendance_date,
+        evt.shift_code || evt.shift_name,
+        { attendanceId: evt.attendance_id },
+      )) {
       await connection.execute('UPDATE users SET total_work_days = total_work_days + 1 WHERE id = ?', [evt.user_id]);
     }
     const dateInfo = `${evt.shift_name || 'Ca làm việc'} - Ngày ${new Date(evt.attendance_date).toLocaleDateString('vi-VN')}`;
@@ -1233,6 +1329,8 @@ async function reviewApprovalHandler(request, response, next) {
   }
   const connection = await pool.getConnection();
   try {
+    await ensureAttendanceLogReviewColumns(connection);
+    await ensureImportedAttendanceTable(connection);
     await connection.beginTransaction();
     const changed = await applyApproval(connection, requestKey, status, reason, request.user.userId);
     if (!changed) {
@@ -1264,6 +1362,8 @@ async function approveAllHandler(request, response, next) {
     const requestsToReview = requestKeys
       ? requests.filter((item) => requestKeys.has(item.request_key))
       : requests;
+    await ensureAttendanceLogReviewColumns(connection);
+    await ensureImportedAttendanceTable(connection);
     await connection.beginTransaction();
     let processedCount = 0;
     for (const item of requestsToReview) {
