@@ -763,12 +763,12 @@ function DashboardShell({ user, page, onNavigate, onLogout, onUserUpdated }) {
         <header className="dashboard-header"><button className="mobile-menu-button" aria-label="Mở menu" onClick={() => setMobileMenu(true)}><Menu size={22} /></button><div className="header-title-link" role="button" tabIndex="0" aria-label="Về trang chủ" onClick={goToHome} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); goToHome(); } }}><h1>{page}</h1></div><div className="header-user"><NotificationCenter onNavigate={onNavigate} /><ProfileMenu user={user} onNavigate={onNavigate} onLogout={onLogout} /></div></header>
         <AnimatePresence mode="wait"><motion.div key={page} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.4 }}><PageContent page={page} user={user} onUserUpdated={onUserUpdated} onNavigate={onNavigate} /></motion.div></AnimatePresence>
       </main>
-      {user.role === 'USER' && <BankUpdatePrompt user={user} active={page === 'Chấm công'} onNavigate={onNavigate} />}
+      {user.role === 'USER' && <BankUpdatePrompt user={user} active={page === 'Chấm công'} onNavigate={onNavigate} onLogout={onLogout} />}
     </div>
   );
 }
 
-function BankUpdatePrompt({ user, active, onNavigate }) {
+function BankUpdatePrompt({ user, active, onNavigate, onLogout }) {
   const [settings, setSettings] = useState(null);
   const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState('');
@@ -788,6 +788,10 @@ function BankUpdatePrompt({ user, active, onNavigate }) {
           cache: 'no-store',
           headers: { Authorization: 'Bearer ' + token },
         });
+        if (response.status === 401) {
+          if (mounted) onLogout();
+          return;
+        }
         const body = await response.json().catch(() => ({}));
         if (!response.ok || !body.success || typeof body.data?.enabled !== 'boolean') {
           throw new Error(body.message || 'Không thể kiểm tra thông báo cập nhật ngân hàng.');
