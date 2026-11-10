@@ -2973,7 +2973,23 @@ function StudentManagement() {
   async function selectMember(member) {
     const response = await fetch(`${apiUrl}/admin/imported-attendance/users/${member.id}`, { headers: { Authorization: `Bearer ${token}` } });
     const body = await response.json();
-    if (response.ok && body.success) setSelected(body.data);
+    if (!response.ok || !body.success) {
+      throw new Error(body.message || 'Không thể tải lịch sử thành viên.');
+    }
+    setSelected(body.data);
+  }
+
+  async function refreshAfterImport() {
+    const response = await fetch(`${apiUrl}/admin/imported-attendance/users?search=${encodeURIComponent(query)}`, {
+      cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    const body = await response.json();
+    if (!response.ok || !body.success || !Array.isArray(body.data)) {
+      throw new Error(body.message || 'Không thể làm mới danh sách thành viên.');
+    }
+    setMembers(body.data);
+    if (selected?.user) await selectMember(selected.user);
   }
 
   async function resetMemberFace(member) {
@@ -3114,7 +3130,7 @@ function StudentManagement() {
     setMembers(refreshBody.data || []);
   }
 
-  return <div className="student-management-page manage-students-container"><ExcelImportCard /><section className="content-panel attendance-management manage-students-card">
+  return <div className="student-management-page manage-students-container"><ExcelImportCard onImported={refreshAfterImport} /><section className="content-panel attendance-management manage-students-card">
     <div className="panel-heading">
       <div>
         <h3>Quản lý & Tra cứu ngày công</h3>
@@ -3316,7 +3332,7 @@ function StudentManagement() {
   </section></div>;
 }
 
-function ExcelImportCard() {
+function ExcelImportCard({ onImported }) {
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -3348,8 +3364,14 @@ function ExcelImportCard() {
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || !body.success) throw new Error(body.message || 'Không thể lưu dữ liệu Excel.');
-      setMessage(`Đã nhập ${body.imported} lượt chấm công${body.unmatched?.length ? `; không khớp ${body.unmatched.length} dòng` : ''}.${body.noStudentCodeUsers ? ` ${body.noStudentCodeUsers} tài khoản không có MSSV: đăng nhập bằng họ tên với mật khẩu user123 và đổi mật khẩu ở lần đăng nhập đầu tiên.` : ''}`);
+      const successMessage = `Đã nhập ${body.imported} lượt chấm công${body.unmatched?.length ? `; không khớp ${body.unmatched.length} dòng` : ''}.${body.noStudentCodeUsers ? ` ${body.noStudentCodeUsers} tài khoản không có MSSV: đăng nhập bằng họ tên với mật khẩu user123 và đổi mật khẩu ở lần đăng nhập đầu tiên.` : ''}`;
+      setMessage(successMessage);
       setPreview(null);
+      try {
+        await onImported?.();
+      } catch (refreshError) {
+        setMessage(`${successMessage} Không thể tự làm mới lịch sử đang mở: ${refreshError.message || 'lỗi không xác định'}. Hãy chọn lại thành viên để tải dữ liệu mới.`);
+      }
     } catch (error) {
       console.error('Chi tiết lỗi import Excel:', error);
       setMessage(error.message);
