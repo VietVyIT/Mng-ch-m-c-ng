@@ -3,6 +3,7 @@ import Chart from 'chart.js/auto';
 import * as faceapi from '@vladmandic/face-api';
 import * as XLSX from 'xlsx';
 import { AnimatePresence, motion } from 'framer-motion';
+import { parseExcelAttendanceDate } from './utils/excel-attendance-date.js';
 import {
   AlertTriangle,
   Award,
@@ -403,52 +404,31 @@ function cleanName(value) {
 }
 
 function parseExcelDate(value) {
-  const str = String(value || '').trim();
-  const match = str.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{4}))?$/);
-  if (!match) return null;
-  const year = match[3] || String(new Date().getFullYear());
-  const num1 = parseInt(match[1], 10);
-  const num2 = parseInt(match[2], 10);
+  return parseExcelAttendanceDate(value);
+}
 
-  let day;
-  let month;
-  if (num1 > 12) {
-    // num1 là ngày (vd: 14/09, 17/08, 24/09)
-    day = num1;
-    month = num2;
-  } else if (num2 > 12) {
-    // num2 là ngày (vd: 09/14, 09/17, 09/24)
-    day = num2;
-    month = num1;
-  } else {
-    // Cả 2 đều <= 12 (vd: 07/09, 10/09, 11/09, 12/09 hoặc 09/10, 09/11, 09/12)
-    // Ưu tiên tháng 9 (đợt công tác tháng 9)
-    if (num2 === 9) {
-      day = num1;
-      month = 9;
-    } else if (num1 === 9) {
-      day = num2;
-      month = 9;
-    } else {
-      // Mặc định định dạng Việt Nam DD/MM
-      day = num1;
-      month = num2;
-    }
-  }
-
-  // Toàn bộ dữ liệu đợt này là tháng 9 (chuẩn hóa các cột ghi nhầm tháng 8 về tháng 9)
-  if (month === 8) {
-    month = 9;
-  }
-
-  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+function resolveImportedShift(value) {
+  const normalized = String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/^(ca|buoi)\s*/, '');
+  const shifts = {
+    sang: IMPORT_SHIFTS.Sáng,
+    morning: IMPORT_SHIFTS.Sáng,
+    chieu: IMPORT_SHIFTS.Chiều,
+    afternoon: IMPORT_SHIFTS.Chiều,
+    toi: IMPORT_SHIFTS.Tối,
+    evening: IMPORT_SHIFTS.Tối,
+  };
+  return shifts[normalized] || null;
 }
 
 function parseAttendanceWorkbook(buffer) {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
   const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1, defval: '', raw: false });
-  const datePattern = /^\d{1,2}\/\d{1,2}(?:\/\d{4})?$/;
-  const dateRowIndex = rows.findIndex((row) => row.some((cell) => datePattern.test(String(cell).trim())));
+  const dateRowIndex = rows.findIndex((row) => row.some((cell) => parseExcelDate(cell)));
   if (dateRowIndex < 0) throw new Error('Không tìm thấy dòng tiêu đề ngày tháng trong file Excel.');
   const headerRows = rows.slice(Math.max(0, dateRowIndex - 3), dateRowIndex + 2);
   const findColumn = (patterns, fallback) => {
@@ -497,9 +477,15 @@ function parseAttendanceWorkbook(buffer) {
     };
 
     for (let column = 0; column < row.length; column += 1) {
+      if (!/^x$/i.test(String(row[column]).trim())) continue;
       const shiftName = String(shifts[column] || '').trim();
-      const shift = IMPORT_SHIFTS[shiftName];
-      if (!dates[column] || !shift || !/^x$/i.test(String(row[column]).trim())) continue;
+      const shift = resolveImportedShift(shiftName);
+      if (!dates[column]) {
+        throw new Error(`Không nhận diện được ngày ở cột ${column + 1}, dòng ${dateRowIndex + 1}.`);
+      }
+      if (!shift) {
+        throw new Error(`Không nhận diện được ca "${shiftName}" ở cột ${column + 1}.`);
+      }
       summary.shifts += 1;
       records.push({ userName, userMSSV, email, date: dates[column], shiftCode: shift.code, totalHours: (new Date(`1970-01-01T${shift.end}`) - new Date(`1970-01-01T${shift.start}`)) / 3600000 });
     }

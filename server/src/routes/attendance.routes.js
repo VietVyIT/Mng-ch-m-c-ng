@@ -469,8 +469,16 @@ router.get('/my', authenticate, async (req, res) => {
                 co.status COLLATE utf8mb4_unicode_ci AS check_out_event_status,
                 'Camera' COLLATE utf8mb4_unicode_ci AS source
          FROM attendance a
-         LEFT JOIN attendance_events ci ON ci.attendance_id = a.id AND ci.event_type = 'CHECK_IN'
-         LEFT JOIN attendance_events co ON co.attendance_id = a.id AND co.event_type = 'CHECK_OUT'
+         LEFT JOIN (
+           SELECT attendance_id,
+                  MAX(CASE WHEN event_type = 'CHECK_IN' THEN id END) AS check_in_event_id,
+                  MAX(CASE WHEN event_type = 'CHECK_OUT' THEN id END) AS check_out_event_id
+           FROM attendance_events
+           WHERE user_id = ?
+           GROUP BY attendance_id
+         ) latest_events ON latest_events.attendance_id = a.id
+         LEFT JOIN attendance_events ci ON ci.id = latest_events.check_in_event_id
+         LEFT JOIN attendance_events co ON co.id = latest_events.check_out_event_id
          WHERE a.user_id = ?
 
          UNION ALL
@@ -490,7 +498,7 @@ router.get('/my', authenticate, async (req, res) => {
        ) history
        ORDER BY history.attendance_date DESC, history.check_in DESC
        LIMIT 1000`,
-      [req.user.userId, req.user.userId, req.user.userId]
+      [req.user.userId, req.user.userId, req.user.userId, req.user.userId]
     );
     return res.json({ success: true, data: deduplicateAttendanceHistory(rows) });
   } catch (error) {

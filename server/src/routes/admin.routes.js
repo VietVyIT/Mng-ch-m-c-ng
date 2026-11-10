@@ -163,10 +163,17 @@ router.post('/attendance/import-excel', async (request, response, next) => {
         unmatched.push({ userName: name, userMSSV: mssv, email });
         continue;
       }
-      const validDate = /^\d{4}-\d{2}-\d{2}$/.test(record.date);
       const allowedShifts = { MORNING: ['Ca Sáng', '07:30:00', '12:00:00'], AFTERNOON: ['Ca Chiều', '13:30:00', '17:30:00'], EVENING: ['Ca Tối', '17:30:00', '20:00:00'] };
       const shift = allowedShifts[record.shiftCode];
-      if (!validDate || !shift) continue;
+      const dateMatch = typeof record.date === 'string' && record.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      const date = dateMatch && new Date(`${record.date}T00:00:00Z`);
+      const validDate = date && Number.isFinite(date.getTime())
+        && date.toISOString().slice(0, 10) === record.date;
+      if (!validDate || !shift) {
+        const error = new Error(`Ngày hoặc ca chấm công không hợp lệ trong dữ liệu của "${name}". Vui lòng kiểm tra file Excel và thử lại.`);
+        error.code = 'INVALID_ATTENDANCE_RECORD';
+        throw error;
+      }
       await connection.execute(
         `INSERT INTO imported_attendance_records
           (user_id, attendance_date, shift_code, shift_name, shift_start, shift_end, check_in, check_out, total_hours)
@@ -182,6 +189,13 @@ router.post('/attendance/import-excel', async (request, response, next) => {
     await connection.rollback();
     if (error instanceof ImportedUserIdentityError) {
       return response.status(error.status).json({
+        success: false,
+        message: error.message,
+        errorCode: error.code,
+      });
+    }
+    if (error.code === 'INVALID_ATTENDANCE_RECORD') {
+      return response.status(400).json({
         success: false,
         message: error.message,
         errorCode: error.code,
